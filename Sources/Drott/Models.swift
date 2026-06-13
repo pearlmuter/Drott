@@ -173,6 +173,7 @@ class GameState: ObservableObject {
         case .king:       return kingDests(for: p)
         case .dwarf:      return dwarfDests(for: p)
         case .hunter:     return hunterDests(for: p)
+        case .bowman:     return bowmanDests(for: p)
         default:          return slidingDests(for: p)
         }
     }
@@ -392,7 +393,10 @@ class GameState: ObservableObject {
         return (moves, attacks)
     }
 
-    // Hunter: 1 step diagonally in any direction, plus knight-shape squares (no jumping).
+    // Hunter: 1 step diagonally (shieldwall applies) + knight-shape squares.
+    // Knight blocking: a move is only blocked when BOTH squares forming the wall across
+    // the shorter axis are occupied — i.e. no straight line can pass from origin to
+    // destination square without hitting an occupied square.
     private func hunterDests(for p: Piece) -> (Set<Position>, Set<Position>) {
         let c = p.pos.col, r = p.pos.row
         var moves = Set<Position>(), attacks = Set<Position>()
@@ -413,16 +417,49 @@ class GameState: ObservableObject {
             return piece(at: Position(col: col, row: row)) != nil
         }
 
-        // 1 step diagonally.
-        for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] { _ = add(c + dc, r + dr) }
-
-        // Knight-shape moves — no jumping: blocked by piece in the longer-axis direction.
-        for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
-            let transitCol = c + (abs(dc) > abs(dr) ? dc/2 : 0)
-            let transitRow = r + (abs(dr) > abs(dc) ? dr/2 : 0)
-            if occupied(transitCol, transitRow) { continue }
+        // 1 step diagonally — shieldwall blocks if both adjacent orthogonals are occupied.
+        for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
+            if occupied(c, r + dr) && occupied(c + dc, r) { continue }
             _ = add(c + dc, r + dr)
         }
+
+        // Knight-shape moves — blocked only when BOTH squares in the perpendicular wall
+        // are occupied (leaving no gap for a straight line to pass through).
+        for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
+            let wallBlocked: Bool
+            if abs(dc) > abs(dr) {
+                // Wall is at column c+dc/2; needs both rows r and r+dr occupied to block.
+                wallBlocked = occupied(c + dc/2, r) && occupied(c + dc/2, r + dr)
+            } else {
+                // Wall is at row r+dr/2; needs both cols c and c+dc occupied to block.
+                wallBlocked = occupied(c, r + dr/2) && occupied(c + dc, r + dr/2)
+            }
+            if wallBlocked { continue }
+            _ = add(c + dc, r + dr)
+        }
+
+        return (moves, attacks)
+    }
+
+    // Bowman: slides straight forward up to 4, plus 1 step sideways each direction.
+    private func bowmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        let fwd = p.side == .red ? 1 : -1
+        let c = p.pos.col, r = p.pos.row
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        func add(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+                return false
+            }
+            moves.insert(pos)
+            return true
+        }
+
+        for step in 1...4 { guard add(c, r + step * fwd) else { break } }
+        for dc in [-1, 1] { _ = add(c + dc, r) }
 
         return (moves, attacks)
     }

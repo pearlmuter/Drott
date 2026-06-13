@@ -1,11 +1,28 @@
 import SwiftUI
+import AppKit
 
 private let SQ: CGFloat = 54
+
+// MARK: - App delegate
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApp.windows.forEach { $0.makeKeyAndOrderFront(nil) }
+        }
+    }
+}
 
 // MARK: - App entry
 
 @main
 struct DrottApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+
     var body: some Scene {
         WindowGroup("Drott") {
             ContentView()
@@ -344,25 +361,42 @@ struct SquareView: View {
 struct PieceToken: View {
     let piece: Piece
 
-    private var size: CGFloat { SQ * 0.82 }
+    // Filename in the bundle: e.g. "red_king", "black_pawn"
+    private var resourceName: String {
+        let side = piece.side.rawValue.lowercased()
+        let name = piece.type == .skjolding ? "pawn" : piece.type.rawValue
+        return "\(side)_\(name)"
+    }
 
-    private var fill: Color {
-        switch (piece.side, piece.type == .king) {
-        case (.red,   true):  return Color(red: 0.80, green: 0.50, blue: 0.05)
-        case (.red,   false): return Color(red: 0.72, green: 0.08, blue: 0.08)
-        case (.black, true):  return Color(red: 0.35, green: 0.35, blue: 0.44)
-        case (.black, false): return Color(red: 0.12, green: 0.12, blue: 0.18)
-        }
+    private var nsImage: NSImage? {
+        // Try the SPM resource bundle first, then fall back to the source tree
+        if let url = Bundle.module.url(forResource: resourceName, withExtension: "png"),
+           let img = NSImage(contentsOf: url) { return img }
+        let fallback = "/Users/emil/Desktop/claudcode/Drott/pieces/\(resourceName).png"
+        return NSImage(contentsOfFile: fallback)
     }
 
     var body: some View {
         ZStack {
-            Circle().fill(fill).frame(width: size, height: size)
-            Circle().stroke(Color.white.opacity(0.22), lineWidth: 1.5)
-                .frame(width: size, height: size)
-            Text(piece.type.symbol)
-                .font(.system(size: size * 0.27, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
+            // White disc so piece icons read clearly on any square colour
+            Circle()
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.30), radius: 2, x: 0, y: 1)
+                .frame(width: SQ * 0.88, height: SQ * 0.88)
+
+            if let img = nsImage {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: SQ * 0.68, height: SQ * 0.68)
+            } else {
+                // Fallback text token for any piece without an image
+                Text(piece.type.symbol)
+                    .font(.system(size: SQ * 0.24, weight: .bold, design: .rounded))
+                    .foregroundColor(piece.side == .red
+                        ? Color(red: 0.72, green: 0.08, blue: 0.08)
+                        : Color(red: 0.12, green: 0.12, blue: 0.18))
+            }
         }
     }
 }

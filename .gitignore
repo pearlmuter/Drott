@@ -2,3 +2,5 @@
 .swiftpm/
 *.xcuserstate
 xcuserdata/
+.DS_Store
+Drott.app/

@@ -377,9 +377,12 @@ class GameState: ObservableObject {
             for step in 1...2 { guard add(c + dc*step, r + dr*step) else { break } }
         }
 
-        // Diagonal slide up to 2.
+        // Diagonal: step 2 only (step 1 is not a valid destination).
+        // Blocked by shieldwall at origin or by any piece on the step-1 transit square.
         for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
-            for step in 1...2 { guard add(c + dc*step, r + dr*step) else { break } }
+            if occupied(c, r + dr) && occupied(c + dc, r) { continue }
+            if occupied(c + dc, r + dr) { continue }
+            _ = add(c + dc*2, r + dr*2)
         }
 
         // Knight-shape moves — no jumping: blocked by a piece in the longer-axis direction.

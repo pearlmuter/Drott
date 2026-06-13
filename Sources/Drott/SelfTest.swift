@@ -44,6 +44,7 @@ enum SelfTest {
         kingCaptureTactic()
         fortControl()
         castleHold()
+        dragMath()
         engineSanity()
         selfPlayStress()
 
@@ -157,19 +158,38 @@ enum SelfTest {
         check(resolved.winReason == .castle, "win reason is castle")
     }
 
-    // The engine returns a legal move on the opening within the time budget.
+    // Drag-and-drop coordinate mapping: a drop's target square must match the
+    // cursor offset, accounting for screen-y-down vs board-row-up.
+    private static func dragMath() {
+        print("[drag math]")
+        let from = Position(col: 5, row: 1)   // F2
+        // Two squares right and two squares "up" the board = screen up (-y).
+        let up = GameState.dropTarget(from: from, translation: CGSize(width: 2 * SQ, height: -2 * SQ))
+        check(up == Position(col: 7, row: 3), "drag up-right lands on H4 (got \(up))")
+        // One square left and one "down" the board = screen down (+y).
+        let down = GameState.dropTarget(from: from, translation: CGSize(width: -SQ, height: SQ))
+        check(down == Position(col: 4, row: 0), "drag down-left lands on E1 (got \(down))")
+        // A tiny jiggle stays on the same square.
+        let stay = GameState.dropTarget(from: from, translation: CGSize(width: 5, height: -4))
+        check(stay == from, "small jiggle stays put (got \(stay))")
+    }
+
+    // The engine returns a legal move on the opening within the time budget,
+    // and reaches a usable search depth despite the expensive mobility eval.
     private static func engineSanity() {
         print("[engine sanity]")
         let b = Board()
         let start = Date()
-        let best = Engine.bestMove(for: b, timeLimit: 1.0)
+        let result = Engine.search(b, timeLimit: 1.2)
         let elapsed = Date().timeIntervalSince(start)
-        check(best != nil, "engine returns a move on the opening")
-        if let mv = best {
+        check(result.best != nil, "engine returns a move on the opening")
+        if let mv = result.best {
             let legal = b.legalMoves().contains(mv)
-            check(legal, "engine's move is legal (\(mv.from)-\(mv.to))")
+            check(legal, "engine's move is legal (\(b.notation(for: mv)))")
         }
-        check(elapsed < 3.0, "search respected the time budget (\(String(format: "%.2f", elapsed))s)")
+        check(result.secondBest != nil, "engine produced a second line")
+        check(result.depth >= 2, "reached usable depth (\(result.depth)) in \(String(format: "%.2f", elapsed))s")
+        check(elapsed < 3.5, "search respected the time budget (\(String(format: "%.2f", elapsed))s)")
     }
 
     // Play a full computer-vs-computer game to completion. Reproduces the real

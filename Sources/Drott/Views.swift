@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-private let SQ: CGFloat = 54
+// `SQ` (square size) is defined in Models.swift and shared with drag hit-testing.
 
 // MARK: - App delegate
 
@@ -168,13 +168,18 @@ struct SidePanel: View {
         infoCard {
             VStack(spacing: 6) {
                 HStack(spacing: 4) {
-                    pbButton("backward.end.fill", enabled: game.canStepBack)  { game.jumpToStart() }
-                    pbButton("backward.fill",     enabled: game.canStepBack)  { game.stepBackward() }
-                    pbButton(game.isPlaying ? "pause.fill" : "play.fill", enabled: true) { game.togglePlay() }
-                    pbButton("forward.fill",      enabled: game.canStepForward) { game.stepForward() }
-                    pbButton("forward.end.fill",  enabled: game.canStepForward) { game.jumpToLatest() }
+                    pbButton("backward.end.fill", enabled: game.canStepBack,
+                             key: .leftArrow, modifiers: .command) { game.jumpToStart() }
+                    pbButton("backward.fill", enabled: game.canStepBack,
+                             key: .leftArrow) { game.stepBackward() }
+                    pbButton(game.isPlaying ? "pause.fill" : "play.fill", enabled: true,
+                             key: .space) { game.togglePlay() }
+                    pbButton("forward.fill", enabled: game.canStepForward,
+                             key: .rightArrow) { game.stepForward() }
+                    pbButton("forward.end.fill", enabled: game.canStepForward,
+                             key: .rightArrow, modifiers: .command) { game.jumpToLatest() }
                 }
-                Text("Move \(game.viewIndex) / \(game.record.count)")
+                Text("Move \(game.viewIndex) / \(game.record.count)   ·   ← →")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -182,21 +187,110 @@ struct SidePanel: View {
         }
     }
 
+    @ViewBuilder
     private func pbButton(_ symbol: String, enabled: Bool,
+                          key: KeyEquivalent? = nil, modifiers: EventModifiers = [],
                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let button = Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12))
                 .frame(width: 30, height: 22)
         }
         .buttonStyle(.bordered)
         .disabled(!enabled)
+
+        if let key {
+            button.keyboardShortcut(key, modifiers: modifiers)
+        } else {
+            button
+        }
+    }
+
+    // MARK: Analysis read-out
+
+    private var analysisCard: some View {
+        infoCard {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    fieldLabel("ENGINE EVAL")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { game.evalEnabled },
+                                             set: { game.setEvalEnabled($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                }
+
+                if game.evalEnabled {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(evalText)
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundStyle(evalColor)
+                        if let a = game.analysis {
+                            Text("depth \(a.depth)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Red’s view · piece value ≈ squares reached")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+
+                    if let a = game.analysis, let best = a.best {
+                        lineRow("Best", move: best, score: a.score)
+                        if let second = a.secondBest {
+                            lineRow("2nd", move: second, score: a.secondScore)
+                        }
+                    } else if game.winner == nil {
+                        Text("analysing…").font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("off").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var evalText: String {
+        guard game.evalEnabled, let s = game.evalRed else { return "–" }
+        let decisive = Engine.mate - Engine.maxDepth
+        if s >=  decisive { return "Red wins" }
+        if s <= -decisive { return "Black wins" }
+        return String(format: "%+.1f", Double(s) / 100.0)
+    }
+
+    private var evalColor: Color {
+        guard game.evalEnabled, let s = game.evalRed else { return .secondary }
+        return s >= 0 ? .red : .primary
+    }
+
+    private func lineRow(_ tag: String, move: Move, score: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(tag)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, alignment: .leading)
+            Text(game.notation(for: move))
+                .font(.system(size: 11, design: .monospaced))
+            Spacer(minLength: 0)
+            Text(scoreText(score))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func scoreText(_ s: Int) -> String {
+        let decisive = Engine.mate - Engine.maxDepth
+        if s >=  decisive { return "#" }
+        if s <= -decisive { return "-#" }
+        return String(format: "%+.1f", Double(s) / 100.0)
     }
 
     // MARK: Game tab
 
     private var gameTab: some View {
         VStack(alignment: .leading, spacing: 10) {
+            analysisCard
+
             // Legend
             infoCard {
                 VStack(alignment: .leading, spacing: 3) {
@@ -375,37 +469,29 @@ struct SidePanel: View {
 struct BoardView: View {
     @ObservedObject var game: GameState
 
+    private let gridSize = SQ * 11
+
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .top, spacing: 8) {
+            EvalBar(redScore: game.evalRed, height: gridSize)
+
             // Row labels  11 … 1
             VStack(spacing: 0) {
                 ForEach((0..<11).reversed(), id: \.self) { row in
                     Text("\(row + 1)")
-                        .frame(width: 26, height: SQ)
+                        .frame(width: 22, height: SQ)
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-                Color.clear.frame(width: 26, height: 26)
+                Color.clear.frame(width: 22, height: 26)
             }
 
             VStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    ForEach((0..<11).reversed(), id: \.self) { row in
-                        HStack(spacing: 0) {
-                            ForEach(0..<11, id: \.self) { col in
-                                let pos = Position(col: col, row: row)
-                                SquareView(
-                                    pos: pos,
-                                    piece: game.piece(at: pos),
-                                    isSelected:     game.selected == pos,
-                                    isMoveTarget:   game.highlightMoves.contains(pos),
-                                    isAttackTarget: game.highlightAttacks.contains(pos)
-                                )
-                                .onTapGesture { game.tap(pos) }
-                            }
-                        }
-                    }
+                ZStack(alignment: .topLeading) {
+                    grid
+                    floatingPiece
                 }
+                .frame(width: gridSize, height: gridSize)
                 .background(Color(red: 0.16, green: 0.16, blue: 0.18))
                 .cornerRadius(4)
 
@@ -421,6 +507,92 @@ struct BoardView: View {
             }
         }
     }
+
+    private var grid: some View {
+        VStack(spacing: 0) {
+            ForEach((0..<11).reversed(), id: \.self) { row in
+                HStack(spacing: 0) {
+                    ForEach(0..<11, id: \.self) { col in
+                        let pos = Position(col: col, row: row)
+                        SquareView(
+                            pos: pos,
+                            piece: game.piece(at: pos),
+                            isSelected:     game.selected == pos,
+                            isMoveTarget:   game.highlightMoves.contains(pos),
+                            isAttackTarget: game.highlightAttacks.contains(pos),
+                            isDragOrigin:   game.dragOrigin == pos
+                        )
+                        .onTapGesture { game.tap(pos) }
+                        .gesture(
+                            DragGesture(minimumDistance: 6, coordinateSpace: .local)
+                                .onChanged { game.dragChanged(from: pos, translation: $0.translation) }
+                                .onEnded   { game.dragEnded(from: pos, translation: $0.translation) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // The piece currently under the cursor, rendered above the grid so it can
+    // float across squares while dragging.
+    @ViewBuilder
+    private var floatingPiece: some View {
+        if let origin = game.dragOrigin, let p = game.draggedPiece {
+            PieceToken(piece: p)
+                .frame(width: SQ - 2, height: SQ - 2)
+                .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 3)
+                .position(
+                    x: CGFloat(origin.col) * SQ + SQ / 2 + game.dragTranslation.width,
+                    y: CGFloat(10 - origin.row) * SQ + SQ / 2 + game.dragTranslation.height
+                )
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+// MARK: - Evaluation bar
+//
+// A chess-style vertical bar: Red advantage fills from the bottom (Red plays
+// up from the bottom of the board), Black from the top. The numeric read-out is
+// in "pawns" (eval / 100), where piece value is mobility.
+
+struct EvalBar: View {
+    let redScore: Int?      // Red perspective; positive = Red ahead
+    let height: CGFloat
+
+    private var decisive: Int { Engine.mate - Engine.maxDepth }
+
+    private var fraction: CGFloat {
+        guard let s = redScore else { return 0.5 }
+        if s >=  decisive { return 1 }
+        if s <= -decisive { return 0 }
+        return CGFloat(1.0 / (1.0 + exp(-Double(s) / 150.0)))
+    }
+
+    private var label: String {
+        guard let s = redScore else { return "–" }
+        if s >=  decisive { return "R#" }
+        if s <= -decisive { return "B#" }
+        return String(format: "%+.1f", Double(s) / 100.0)
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Rectangle().fill(Color(red: 0.12, green: 0.12, blue: 0.14))          // Black
+            Rectangle().fill(Color(red: 0.80, green: 0.20, blue: 0.18))          // Red
+                .frame(height: max(0, min(height, height * fraction)))
+        }
+        .frame(width: 18, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.25), lineWidth: 0.5))
+        .overlay(alignment: redScore.map { $0 >= 0 } ?? true ? .bottom : .top) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.vertical, 3)
+        }
+    }
 }
 
 // MARK: - Square
@@ -431,6 +603,7 @@ struct SquareView: View {
     let isSelected: Bool
     let isMoveTarget: Bool
     let isAttackTarget: Bool
+    var isDragOrigin: Bool = false
 
     private static let normalBeige = Color(red: 0.94, green: 0.90, blue: 0.81)
     private static let fortBeige   = Color(red: 0.86, green: 0.80, blue: 0.69)
@@ -475,10 +648,11 @@ struct SquareView: View {
                         .frame(width: (SQ - 2) * 0.30, height: (SQ - 2) * 0.30)
                 }
 
-                // Piece or coordinate label
-                if let p = piece {
+                // Piece or coordinate label. The dragged piece is hidden here —
+                // a floating copy is rendered by the board instead.
+                if let p = piece, !isDragOrigin {
                     PieceToken(piece: p)
-                } else if !isMoveTarget {
+                } else if piece == nil && !isMoveTarget {
                     VStack {
                         Spacer()
                         HStack {

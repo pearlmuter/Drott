@@ -1,5 +1,10 @@
 import Foundation
 import Combine
+import CoreGraphics
+
+/// On-screen size of one board square, in points. Shared by the views and by
+/// the drag-to-move hit-testing in `GameState`.
+let SQ: CGFloat = 54
 
 // MARK: - Position
 
@@ -239,6 +244,16 @@ struct Board {
         }
 
         return b
+    }
+
+    /// Chess-style notation for a move played from this position, e.g.
+    /// "Sp F2-G3", "Bk E2×F3", or "E3-E4" (Skjoldings carry no prefix).
+    func notation(for move: Move) -> String {
+        guard let mover = piece(at: move.from) else { return "\(move.from)-\(move.to)" }
+        let sym = mover.type == .skjolding ? "" : mover.type.symbol
+        let base = sym.isEmpty ? "\(move.from)" : "\(sym) \(move.from)"
+        let capture = piece(at: move.to) != nil
+        return base + (capture ? "×\(move.to)" : "-\(move.to)")
     }
 
     func checkFortWin() -> Side? {
@@ -572,7 +587,9 @@ class GameState: ObservableObject {
     /// `history[0]` is the opening; `history[i+1]` follows `record[i]`.
     @Published var history: [Board] = [Board()]
     /// Index of the position currently shown on the board.
-    @Published var viewIndex: Int = 0
+    @Published var viewIndex: Int = 0 {
+        didSet { if viewIndex != oldValue { scheduleAnalysis() } }
+    }
     /// One entry per played move, aligned so `record[i]` produced `history[i+1]`.
     @Published var record: [MoveRecord] = []
 
@@ -591,6 +608,19 @@ class GameState: ObservableObject {
     /// True while self-play / replay is auto-advancing.
     @Published var isPlaying = false
 
+    // Drag-to-move state (nil origin = no drag in progress).
+    @Published var dragOrigin: Position? = nil
+    @Published var dragTranslation: CGSize = .zero
+
+    // Background analysis of the *viewed* position, for the eval bar / read-out.
+    @Published var evalEnabled = true
+    @Published var evalRed: Int? = nil          // score from Red's perspective
+    @Published var analysis: SearchResult? = nil
+    @Published var analysisTurn: Side = .red    // side to move in the analysed pos
+    private var analysisGen = 0
+    private let analysisQueue = DispatchQueue(label: "drott.analysis", qos: .userInitiated)
+    private let analysisTime = 0.3
+
     /// The live game position (where new moves are appended).
     var liveBoard: Board { history[history.count - 1] }
     /// The position currently displayed (may be in the past while scrubbing).
@@ -604,6 +634,9 @@ class GameState: ObservableObject {
     var atLatest: Bool { viewIndex == history.count - 1 }
     var canStepBack: Bool { viewIndex > 0 }
     var canStepForward: Bool { viewIndex < history.count - 1 }
+
+    /// The piece currently being dragged (on the live board), if any.
+    var draggedPiece: Piece? { dragOrigin.flatMap { liveBoard.piece(at: $0) } }
 
     init() { reset() }
 
@@ -623,6 +656,7 @@ class GameState: ObservableObject {
         } else {
             maybeScheduleReply()
         }
+        scheduleAnalysis()
     }
 
     func piece(at pos: Position) -> Piece? { viewedBoard.piece(at: pos) }
@@ -630,6 +664,9 @@ class GameState: ObservableObject {
     func validDestinations(for p: Piece) -> (Set<Position>, Set<Position>) {
         liveBoard.validDestinations(for: p)
     }
+
+    /// Notation for a candidate move in the currently-viewed position.
+    func notation(for move: Move) -> String { viewedBoard.notation(for: move) }
 
     func tap(_ pos: Position) {
         // Taps only act on the live position, for a human-controlled side.
@@ -654,6 +691,81 @@ class GameState: ObservableObject {
             selected = pos
         }
         updateHighlights()
+    }
+
+    // MARK: Drag to move
+
+    /// Called continuously as a piece is dragged. Picks up the piece on first
+    /// movement (lighting up its legal targets) and tracks the cursor offset.
+    func dragChanged(from pos: Position, translation: CGSize) {
+        guard atLatest, liveBoard.winner == nil, !thinking else { return }
+        guard controller(of: liveBoard.sideToMove) == .human else { return }
+
+        if dragOrigin == nil {
+            guard let p = liveBoard.piece(at: pos), p.side == liveBoard.sideToMove else { return }
+            dragOrigin = pos
+            selected = pos
+            updateHighlights()
+        }
+        dragTranslation = translation
+    }
+
+    /// The square a drag lands on, given the start square and the cursor offset.
+    /// Screen y grows downward but board rows grow upward, hence the negation.
+    static func dropTarget(from pos: Position, translation: CGSize) -> Position {
+        let dCol = Int((translation.width  / SQ).rounded())
+        let dRow = Int((-translation.height / SQ).rounded())
+        return Position(col: pos.col + dCol, row: pos.row + dRow)
+    }
+
+    /// Called when a drag ends. Drops the piece on the nearest square and plays
+    /// the move if it is legal; otherwise the piece snaps back.
+    func dragEnded(from pos: Position, translation: CGSize) {
+        defer { dragOrigin = nil; dragTranslation = .zero }
+        guard dragOrigin == pos, let p = liveBoard.piece(at: pos) else { return }
+
+        let target = GameState.dropTarget(from: pos, translation: translation)
+
+        guard Position.valid(col: target.col, row: target.row) else {
+            clearSelection(); return
+        }
+        let (m, a) = liveBoard.validDestinations(for: p)
+        if m.contains(target) || a.contains(target) {
+            perform(Move(from: pos, to: target, isCapture: a.contains(target)))
+        } else {
+            clearSelection()
+        }
+    }
+
+    // MARK: Analysis (eval read-out)
+
+    /// Re-analyse the *viewed* position in the background, superseding any
+    /// in-flight analysis. Publishes a Red-perspective score and the top lines.
+    func scheduleAnalysis() {
+        analysisGen += 1
+        guard evalEnabled else { evalRed = nil; analysis = nil; return }
+
+        let board = viewedBoard
+        let turn = board.sideToMove
+        analysisTurn = turn
+
+        if let w = board.winner {
+            evalRed = (w == .red) ? Engine.mate : -Engine.mate
+            analysis = nil
+            return
+        }
+
+        let gen = analysisGen
+        let budget = analysisTime
+        analysisQueue.async { [weak self] in
+            let result = Engine.search(board, timeLimit: budget)
+            DispatchQueue.main.async {
+                guard let self, self.analysisGen == gen else { return }
+                self.analysis = result
+                self.analysisTurn = turn
+                self.evalRed = (turn == .red) ? result.score : -result.score
+            }
+        }
     }
 
     // MARK: Mode
@@ -772,10 +884,7 @@ class GameState: ObservableObject {
         }
 
         // Chess-style notation, computed before the board changes.
-        let sym = mover.type == .skjolding ? "" : mover.type.symbol
-        let cap = live.piece(at: move.to) != nil
-        var notation = sym.isEmpty ? "\(move.from)" : "\(sym) \(move.from)"
-        notation += cap ? "×\(move.to)" : "-\(move.to)"
+        let notation = live.notation(for: move)
 
         let wasAtLatest = atLatest
         let newBoard = live.applying(move)
@@ -816,7 +925,8 @@ class GameState: ObservableObject {
     }
 
     /// Search the live position off the main thread, enforce a minimum elapsed
-    /// time so playback stays watchable, then apply the move and call `then`.
+    /// time so playback stays watchable, then apply the chosen move and call
+    /// `then`. Uses the multi-line result so play can vary (occasional 2nd-best).
     private func generateEngineMove(minStep: Double, then: (() -> Void)? = nil) {
         guard !thinking else { return }
         thinking = true
@@ -824,7 +934,8 @@ class GameState: ObservableObject {
         let budget = thinkTime
         let start = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let best = Engine.bestMove(for: snapshot, timeLimit: budget)
+            let result = Engine.search(snapshot, timeLimit: budget)
+            let chosen = Engine.pickMove(from: result)
             let elapsed = Date().timeIntervalSince(start)
             if elapsed < minStep { Thread.sleep(forTimeInterval: minStep - elapsed) }
             DispatchQueue.main.async {
@@ -832,10 +943,16 @@ class GameState: ObservableObject {
                 self.thinking = false
                 // Drop a stale result (game reset or rewound during the search).
                 guard self.liveBoard == snapshot, self.liveBoard.winner == nil else { return }
-                if let mv = best { self.perform(mv) }
+                if let mv = chosen { self.perform(mv) }
                 then?()
             }
         }
+    }
+
+    /// Toggle background analysis (the eval read-out).
+    func setEvalEnabled(_ on: Bool) {
+        evalEnabled = on
+        scheduleAnalysis()
     }
 
     // MARK: Highlights

@@ -5,28 +5,45 @@ import Foundation
 // A native Swift game-search engine for Drott. It reuses `Board` (the single
 // source of truth for the rules) and applies the standard chess-engine search
 // techniques — negamax with alpha-beta pruning, iterative deepening, and a
-// capture-only quiescence search — paired with a Drott-specific evaluation
-// function that understands the three win conditions:
+// capture-only quiescence search — paired with a Drott-specific evaluation.
 //
+// The three win conditions it understands:
 //   1. capture the enemy king,
 //   2. hold your king on the castle (F6) until your next turn,
 //   3. occupy the enemy fort while they hold none of their own.
 //
-// Search values are in "centipawn-like" units (a Skjolding ≈ 100).
+// Piece value is *mobility*: a piece is worth roughly the number of squares it
+// can currently reach. Active pieces are valuable; boxed-in pieces are not.
+
+struct SearchResult {
+    var best: Move?
+    var secondBest: Move?
+    var score: Int        // best move's score, from the side-to-move's view
+    var secondScore: Int
+    var depth: Int        // depth of the last fully-completed iteration
+}
 
 enum Engine {
 
-    // Large terminal score; kept well below Int.max so ±MATE arithmetic is safe.
+    // Large terminal score; kept well below Int.max so ±mate arithmetic is safe.
     static let mate = 1_000_000
     static let infinity = 2_000_000
     static let maxDepth = 32
 
-    // Material values. The king is 0 here — its loss is the terminal `mate`
-    // score, and it is always present in any non-terminal position, so it never
-    // contributes to the relative evaluation.
-    static func value(_ t: PieceType) -> Int {
+    /// How much a square of mobility is worth (scales the whole eval so that
+    /// ~one piece of mobility advantage ≈ 0.04 "pawns" in the display).
+    static let mobilityWeight = 4
+
+    // How often, and within what margin, the engine plays the second-best move
+    // instead of the best — just enough to break determinism without blundering.
+    static let varietyProbability = 0.30
+    static let varietyMargin = 30          // in eval units (~0.3 "pawns")
+
+    // Static piece ranks used ONLY for capture move-ordering (cheap, need not
+    // match the mobility evaluation). King highest so king-captures sort first.
+    private static func orderingValue(_ t: PieceType) -> Int {
         switch t {
-        case .king:      return 0
+        case .king:      return 10_000
         case .skjolding: return 100
         case .spearman:  return 240
         case .hunter:    return 280
@@ -40,49 +57,77 @@ enum Engine {
 
     // MARK: Public entry
 
-    /// Best move for the side to move in `board`, searched within `timeLimit`
-    /// seconds via iterative deepening. Returns nil only if there are no moves.
-    static func bestMove(for board: Board, timeLimit: TimeInterval) -> Move? {
+    /// Full multi-line search: returns the best and second-best root moves with
+    /// their exact scores, plus the depth reached, via iterative deepening.
+    ///
+    /// Root moves are searched with a full window (no sibling pruning) so every
+    /// root score is exact — that is what makes the second-best reliable and the
+    /// evaluation read-out meaningful. Pruning still applies one level down.
+    static func search(_ board: Board, timeLimit: TimeInterval) -> SearchResult {
         let deadline = Date().addingTimeInterval(timeLimit)
-        let rootMoves = ordered(board.legalMoves(), on: board)
-        guard !rootMoves.isEmpty else { return nil }
+        var ordering = ordered(board.legalMoves(), on: board)
 
-        var best = rootMoves[0]
+        guard !ordering.isEmpty else {
+            return SearchResult(best: nil, secondBest: nil,
+                                score: -(mate), secondScore: -(mate), depth: 0)
+        }
+
+        var result = SearchResult(best: ordering[0], secondBest: ordering.count > 1 ? ordering[1] : nil,
+                                  score: -infinity, secondScore: -infinity, depth: 0)
         var depth = 1
 
         while depth <= maxDepth {
-            var alpha = -infinity
-            let beta = infinity
-            var localBest = rootMoves[0]
+            var scored: [(move: Move, score: Int)] = []
             var completed = true
 
-            // Search the previous iteration's best move first.
-            var moves = rootMoves
-            if let i = moves.firstIndex(of: best) {
-                moves.remove(at: i); moves.insert(best, at: 0)
-            }
-
-            for mv in moves {
+            for mv in ordering {
                 if Date() >= deadline { completed = false; break }
                 let child = board.applying(mv)
-                let score = -negamax(child, depth: depth - 1, alpha: -beta,
-                                     beta: -alpha, ply: 1, deadline: deadline)
-                if score > alpha {
-                    alpha = score
-                    localBest = mv
-                }
+                let s = -negamax(child, depth: depth - 1, alpha: -infinity,
+                                 beta: infinity, ply: 1, deadline: deadline)
+                scored.append((mv, s))
             }
 
-            if completed {
-                best = localBest
-                // A forced win is found — no point searching deeper.
-                if alpha >= mate - maxDepth { break }
+            // Only adopt a depth that finished — a partial sweep is unreliable.
+            guard completed else { break }
+
+            scored.sort { $0.score > $1.score }
+            result.best = scored[0].move
+            result.score = scored[0].score
+            if scored.count > 1 {
+                result.secondBest = scored[1].move
+                result.secondScore = scored[1].score
             } else {
-                break
+                result.secondBest = nil
+                result.secondScore = -infinity
             }
+            result.depth = depth
+
+            ordering = scored.map { $0.move }       // best-first next iteration
+            if result.score >= mate - maxDepth { break }   // forced win found
             depth += 1
         }
 
+        return result
+    }
+
+    /// Convenience wrapper used by tests and simple callers.
+    static func bestMove(for board: Board, timeLimit: TimeInterval) -> Move? {
+        search(board, timeLimit: timeLimit).best
+    }
+
+    /// Pick a move from a result, occasionally choosing the second-best (when it
+    /// is nearly as good) so play is not perfectly deterministic. A forced win is
+    /// always taken; a second-best that loses is never chosen.
+    static func pickMove(from r: SearchResult,
+                         rng: () -> Double = { Double.random(in: 0..<1) }) -> Move? {
+        guard let best = r.best else { return nil }
+        guard let second = r.secondBest else { return best }
+        if r.score >= mate - maxDepth { return best }              // take the win
+        if r.secondScore <= -(mate - maxDepth) { return best }     // 2nd is a loss
+        if r.score - r.secondScore <= varietyMargin, rng() < varietyProbability {
+            return second
+        }
         return best
     }
 
@@ -156,19 +201,23 @@ enum Engine {
     // valuable victim first (king highest of all), quiet moves after.
 
     private static func ordered(_ moves: [Move], on board: Board) -> [Move] {
-        moves.sorted { score($0, on: board) > score($1, on: board) }
+        moves.sorted { orderingScore($0, on: board) > orderingScore($1, on: board) }
     }
 
-    private static func score(_ mv: Move, on board: Board) -> Int {
+    private static func orderingScore(_ mv: Move, on board: Board) -> Int {
         guard mv.isCapture, let victim = board.piece(at: mv.to) else { return 0 }
         if victim.type == .king { return 1_000_000 }
-        return 10_000 + value(victim.type)
+        return 10_000 + orderingValue(victim.type)
     }
 
     // MARK: Evaluation
     //
     // Static score from `me`'s perspective (positive = good for `me`). Symmetric:
     // every term is added for `me` and subtracted for the opponent.
+    //
+    // Piece value IS mobility: each piece contributes the number of squares it
+    // can reach, scaled by `mobilityWeight`. Material and activity therefore fall
+    // out of the same term — a trapped Wolf is worth little, a free one a lot.
 
     static func evaluate(_ board: Board, for me: Side) -> Int {
         let opp = me.other
@@ -185,18 +234,15 @@ enum Engine {
             guard let p = sq else { continue }
             let sgn = p.side == me ? 1 : -1
 
-            // Material.
-            score += sgn * value(p.type)
+            // Material = mobility (squares this piece can currently reach).
+            let (m, a) = board.validDestinations(for: p)
+            score += sgn * (m.count + a.count) * mobilityWeight
 
             // Skjolding advancement toward the enemy.
             if p.type == .skjolding {
                 let advance = p.side == .red ? p.pos.row : (10 - p.pos.row)
                 score += sgn * advance * 4
             }
-
-            // Centre activity (closer to F6 is worth more).
-            let centre = max(0, 5 - p.pos.chebyshev(to: .castle))
-            score += sgn * centre * 3
 
             if p.type == .king {
                 if p.side == me { myKing = p.pos } else { oppKing = p.pos }

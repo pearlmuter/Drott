@@ -168,6 +168,7 @@ class GameState: ObservableObject {
         case .skjolding:  return skjoldingDests(for: p)
         case .berserker:  return berserkerDests(for: p)
         case .spearman:   return spearmanDests(for: p)
+        case .wolf:       return wolfDests(for: p)
         default:          return slidingDests(for: p)
         }
     }
@@ -274,6 +275,25 @@ class GameState: ObservableObject {
         // Sideways: 1 step each direction.
         for dc in [-1, 1] { _ = add(c + dc, r) }
 
+        return (moves, attacks)
+    }
+
+    // Wolf: slides orthogonally up to 3 steps in any direction.
+    private func wolfDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        var moves = Set<Position>(), attacks = Set<Position>()
+        for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] {
+            var col = p.pos.col + dc, row = p.pos.row + dr
+            for _ in 1...3 {
+                guard Position.valid(col: col, row: row) else { break }
+                let pos = Position(col: col, row: row)
+                if let hit = piece(at: pos) {
+                    if hit.side != p.side { attacks.insert(pos) }
+                    break
+                }
+                moves.insert(pos)
+                col += dc; row += dr
+            }
+        }
         return (moves, attacks)
     }
 

@@ -71,6 +71,7 @@ class GameState: ObservableObject {
     @Published var pieces: [Piece]          = []
     @Published var selected: Position?      = nil
     @Published var turn: Side               = .red
+    @Published var winner: Side?            = nil
     @Published var log: [LogEntry]          = []
     @Published var highlightMoves: Set<Position>   = []
     @Published var highlightAttacks: Set<Position> = []
@@ -80,17 +81,19 @@ class GameState: ObservableObject {
     // MARK: Public API
 
     func reset() {
-        pieces         = []
-        selected       = nil
-        turn           = .red
-        log            = []
-        highlightMoves = []
+        pieces           = []
+        selected         = nil
+        turn             = .red
+        winner           = nil
+        log              = []
+        highlightMoves   = []
         highlightAttacks = []
         buildStart()
         addLog("Game started — Red's turn.")
     }
 
     func tap(_ pos: Position) {
+        guard winner == nil else { return }
         let tapped = piece(at: pos)
         if let sel = selected {
             if sel == pos {
@@ -126,9 +129,12 @@ class GameState: ObservableObject {
         }
 
         var entry = "\(mover.side.rawValue) \(mover.type.fullName)  \(from) → \(to)"
+        var kingCaptured = false
 
         if let ci = pieces.firstIndex(where: { $0.pos == to }) {
-            entry += "  ×\(pieces[ci].type.fullName)"
+            let captured = pieces[ci]
+            entry += "  ×\(captured.type.fullName)"
+            if captured.type == .king { kingCaptured = true }
             pieces.remove(at: ci)
         }
         if let ni = pieces.firstIndex(where: { $0.pos == from }) {
@@ -137,8 +143,14 @@ class GameState: ObservableObject {
 
         addLog(entry)
         selected = nil
-        turn = turn.other
-        addLog("\(turn.rawValue)'s turn.")
+
+        if kingCaptured {
+            winner = mover.side
+            addLog("\(mover.side.rawValue) wins — king captured!")
+        } else {
+            turn = turn.other
+            addLog("\(turn.rawValue)'s turn.")
+        }
     }
 
     private func updateHighlights() {
@@ -153,8 +165,9 @@ class GameState: ObservableObject {
 
     func validDestinations(for p: Piece) -> (Set<Position>, Set<Position>) {
         switch p.type {
-        case .skjolding: return skjoldingDests(for: p)
-        default:         return slidingDests(for: p)   // placeholder until each piece gets its own rules
+        case .skjolding:  return skjoldingDests(for: p)
+        case .berserker:  return berserkerDests(for: p)
+        default:          return slidingDests(for: p)
         }
     }
 
@@ -197,6 +210,35 @@ class GameState: ObservableObject {
         return (moves, attacks)
     }
 
+    // Berserker: 3 forward lanes (col-1, col, col+1) each sliding up to 3 steps,
+    // plus 1 step directly sideways. No backward movement.
+    private func berserkerDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        let fwd = p.side == .red ? 1 : -1
+        let c = p.pos.col, r = p.pos.row
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        // Returns true if passable (empty), false if blocked.
+        func add(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+                return false
+            }
+            moves.insert(pos)
+            return true
+        }
+
+        // Three forward lanes.
+        for dc in [-1, 0, 1] {
+            for step in 1...3 { guard add(c + dc, r + step * fwd) else { break } }
+        }
+        // Direct sideways 1 step.
+        for dc in [-1, 1] { _ = add(c + dc, r) }
+
+        return (moves, attacks)
+    }
+
     // Fallback: unlimited straight-line movement in all 8 directions (no per-piece rule yet).
     private func slidingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
         var moves = Set<Position>(), attacks = Set<Position>()
@@ -213,6 +255,43 @@ class GameState: ObservableObject {
             }
         }
         return (moves, attacks)
+    }
+
+    // MARK: File-based command interface (for AI testing)
+    // Write commands to /tmp/drott_cmd.txt:  "tap F6"  or  "reset"
+
+    func startCommandListener() {
+        let path = "/tmp/drott_cmd.txt"
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            while true {
+                Thread.sleep(forTimeInterval: 0.3)
+                guard let self,
+                      let raw = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+                let cmd = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cmd.isEmpty else { continue }
+                try? FileManager.default.removeItem(atPath: path)
+                DispatchQueue.main.async { self.processCommand(cmd) }
+            }
+        }
+    }
+
+    private func processCommand(_ cmd: String) {
+        let parts = cmd.split(separator: " ").map(String.init)
+        guard let verb = parts.first else { return }
+        switch verb {
+        case "tap":
+            guard let posStr = parts.dropFirst().first, posStr.count == 2,
+                  let colChar = posStr.first?.uppercased().first,
+                  let colAscii = colChar.asciiValue,
+                  colAscii >= 65, colAscii <= 75,
+                  let rowNum = Int(posStr.dropFirst()),
+                  (1...11).contains(rowNum) else { return }
+            tap(Position(col: Int(colAscii) - 65, row: rowNum - 1))
+        case "reset":
+            reset()
+        default:
+            break
+        }
     }
 
     private func addLog(_ text: String) {

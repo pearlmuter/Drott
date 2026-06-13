@@ -46,6 +46,7 @@ struct ContentView: View {
                 .padding(16)
         }
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear { game.startCommandListener() }
     }
 }
 
@@ -60,15 +61,16 @@ struct SidePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
 
-            // Turn
+            // Turn / Winner
             infoCard {
                 HStack(spacing: 8) {
+                    let side = game.winner ?? game.turn
                     Circle()
-                        .fill(game.turn == .red ? Color.red : Color.primary)
+                        .fill(side == .red ? Color.red : Color.primary)
                         .frame(width: 13, height: 13)
                     VStack(alignment: .leading, spacing: 1) {
-                        fieldLabel("TURN")
-                        Text(game.turn.rawValue).font(.title3.weight(.semibold))
+                        fieldLabel(game.winner != nil ? "WINNER" : "TURN")
+                        Text(side.rawValue).font(.title3.weight(.semibold))
                     }
                 }
             }

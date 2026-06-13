@@ -191,14 +191,14 @@ class GameState: ObservableObject {
         place(.wolf,      .red, col: 3, row: 0)   // D1
         place(.elf,       .red, col: 4, row: 0)   // E1
         place(.king,      .red, col: 5, row: 0)   // F1
-        place(.berserker, .red, col: 6, row: 0)   // G1
+        place(.dwarf,     .red, col: 6, row: 0)   // G1
         place(.hunter,    .red, col: 7, row: 0)   // H1
         place(.skjolding, .red, col: 8, row: 0)   // I1
         // Rank 2
         place(.skjolding, .red, col: 3, row: 1)   // D2
-        place(.bowman,    .red, col: 4, row: 1)   // E2
+        place(.berserker, .red, col: 4, row: 1)   // E2
         place(.spearman,  .red, col: 5, row: 1)   // F2
-        place(.dwarf,     .red, col: 6, row: 1)   // G2
+        place(.bowman,    .red, col: 6, row: 1)   // G2
         place(.skjolding, .red, col: 7, row: 1)   // H2
         // Rank 3
         place(.skjolding, .red, col: 4, row: 2)   // E3
@@ -211,14 +211,14 @@ class GameState: ObservableObject {
         place(.wolf,      .black, col: 3, row: 10)  // D11
         place(.elf,       .black, col: 4, row: 10)  // E11
         place(.king,      .black, col: 5, row: 10)  // F11
-        place(.berserker, .black, col: 6, row: 10)  // G11
+        place(.dwarf,     .black, col: 6, row: 10)  // G11
         place(.hunter,    .black, col: 7, row: 10)  // H11
         place(.skjolding, .black, col: 8, row: 10)  // I11
         // Rank 10
         place(.skjolding, .black, col: 3, row: 9)   // D10
-        place(.bowman,    .black, col: 4, row: 9)   // E10
+        place(.berserker, .black, col: 4, row: 9)   // E10
         place(.spearman,  .black, col: 5, row: 9)   // F10
-        place(.dwarf,     .black, col: 6, row: 9)   // G10
+        place(.bowman,    .black, col: 6, row: 9)   // G10
         place(.skjolding, .black, col: 7, row: 9)   // H10
         // Rank 9
         place(.skjolding, .black, col: 4, row: 8)   // E9

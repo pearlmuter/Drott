@@ -97,8 +97,12 @@ class GameState: ObservableObject {
                 selected = nil
             } else if let t = tapped, t.side == turn {
                 selected = pos
-            } else {
-                move(from: sel, to: pos)
+            } else if let p = piece(at: sel) {
+                let (m, a) = validDestinations(for: p)
+                if m.contains(pos) || a.contains(pos) {
+                    move(from: sel, to: pos)
+                }
+                // invalid target — keep piece selected, do nothing
             }
         } else if let t = tapped, t.side == turn {
             selected = pos
@@ -137,33 +141,78 @@ class GameState: ObservableObject {
         addLog("\(turn.rawValue)'s turn.")
     }
 
-    // Straight-line reachability (all 8 directions, blocked by any piece).
-    // Per-piece movement ranges are not yet enforced — to be added.
     private func updateHighlights() {
         guard let sel = selected, let p = piece(at: sel) else {
-            highlightMoves   = []
-            highlightAttacks = []
-            return
+            highlightMoves = []; highlightAttacks = []; return
         }
-        var moves   = Set<Position>()
-        var attacks = Set<Position>()
+        let (m, a) = validDestinations(for: p)
+        highlightMoves = m; highlightAttacks = a
+    }
 
-        let dirs = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
-        for (dc, dr) in dirs {
-            var c = p.pos.col + dc
-            var r = p.pos.row + dr
-            while Position.valid(col: c, row: r) {
-                let pos = Position(col: c, row: r)
+    // MARK: Movement rules
+
+    func validDestinations(for p: Piece) -> (Set<Position>, Set<Position>) {
+        switch p.type {
+        case .skjolding: return skjoldingDests(for: p)
+        default:         return slidingDests(for: p)   // placeholder until each piece gets its own rules
+        }
+    }
+
+    // Skjolding: 2 forward (if 1-forward clear), diagonal forward ×2, 1 backward.
+    // Shieldwall: diagonal is blocked when both adjacent orthogonal squares hold enemies.
+    private func skjoldingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        let fwd = p.side == .red ? 1 : -1
+        let c = p.pos.col, r = p.pos.row
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        func add(_ col: Int, _ row: Int) {
+            guard Position.valid(col: col, row: row) else { return }
+            let dest = Position(col: col, row: row)
+            if let hit = piece(at: dest) {
+                if hit.side != p.side { attacks.insert(dest) }
+            } else {
+                moves.insert(dest)
+            }
+        }
+
+        func isEnemy(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            return piece(at: Position(col: col, row: row))?.side == p.side.other
+        }
+
+        // 2 forward — only if the intervening square is empty
+        if piece(at: Position(col: c, row: r + fwd)) == nil {
+            add(c, r + 2 * fwd)
+        }
+
+        // diagonal forward (left and right) — blocked by shieldwall
+        for dc in [-1, 1] {
+            if isEnemy(c, r + fwd) && isEnemy(c + dc, r) { continue }
+            add(c + dc, r + fwd)
+        }
+
+        // 1 backward
+        add(c, r - fwd)
+
+        return (moves, attacks)
+    }
+
+    // Fallback: unlimited straight-line movement in all 8 directions (no per-piece rule yet).
+    private func slidingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        var moves = Set<Position>(), attacks = Set<Position>()
+        for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)] {
+            var col = p.pos.col + dc, row = p.pos.row + dr
+            while Position.valid(col: col, row: row) {
+                let pos = Position(col: col, row: row)
                 if let blocker = piece(at: pos) {
                     if blocker.side != p.side { attacks.insert(pos) }
                     break
                 }
                 moves.insert(pos)
-                c += dc; r += dr
+                col += dc; row += dr
             }
         }
-        highlightMoves   = moves
-        highlightAttacks = attacks
+        return (moves, attacks)
     }
 
     private func addLog(_ text: String) {

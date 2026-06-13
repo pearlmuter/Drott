@@ -205,24 +205,24 @@ class GameState: ObservableObject {
         place(.skjolding, .red, col: 5, row: 2)   // F3
         place(.skjolding, .red, col: 6, row: 2)   // G3
 
-        // ── Black (mirrored) ──────────────────────────────────────────────
-        // Rank 11
-        place(.skjolding, .black, col: 2, row: 10)  // C11
-        place(.wolf,      .black, col: 3, row: 10)  // D11
-        place(.elf,       .black, col: 4, row: 10)  // E11
-        place(.king,      .black, col: 5, row: 10)  // F11
-        place(.dwarf,     .black, col: 6, row: 10)  // G11
-        place(.hunter,    .black, col: 7, row: 10)  // H11
-        place(.skjolding, .black, col: 8, row: 10)  // I11
+        // ── Black (point-symmetric: col → 10-col, row → 10-row) ─────────
+        // Rank 11 — same formation as Red rank 1 from Black's own perspective
+        place(.skjolding, .black, col: 8, row: 10)  // I11  ↔ C1
+        place(.wolf,      .black, col: 7, row: 10)  // H11  ↔ D1
+        place(.elf,       .black, col: 6, row: 10)  // G11  ↔ E1
+        place(.king,      .black, col: 5, row: 10)  // F11  ↔ F1
+        place(.dwarf,     .black, col: 4, row: 10)  // E11  ↔ G1
+        place(.hunter,    .black, col: 3, row: 10)  // D11  ↔ H1
+        place(.skjolding, .black, col: 2, row: 10)  // C11  ↔ I1
         // Rank 10
-        place(.skjolding, .black, col: 3, row: 9)   // D10
-        place(.berserker, .black, col: 4, row: 9)   // E10
-        place(.spearman,  .black, col: 5, row: 9)   // F10
-        place(.bowman,    .black, col: 6, row: 9)   // G10
-        place(.skjolding, .black, col: 7, row: 9)   // H10
+        place(.skjolding, .black, col: 7, row: 9)   // H10  ↔ D2
+        place(.berserker, .black, col: 6, row: 9)   // G10  ↔ E2
+        place(.spearman,  .black, col: 5, row: 9)   // F10  ↔ F2
+        place(.bowman,    .black, col: 4, row: 9)   // E10  ↔ G2
+        place(.skjolding, .black, col: 3, row: 9)   // D10  ↔ H2
         // Rank 9
-        place(.skjolding, .black, col: 4, row: 8)   // E9
-        place(.skjolding, .black, col: 5, row: 8)   // F9
-        place(.skjolding, .black, col: 6, row: 8)   // G9
+        place(.skjolding, .black, col: 6, row: 8)   // G9   ↔ E3
+        place(.skjolding, .black, col: 5, row: 8)   // F9   ↔ F3
+        place(.skjolding, .black, col: 4, row: 8)   // E9   ↔ G3
     }
 }

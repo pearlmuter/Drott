@@ -167,6 +167,7 @@ class GameState: ObservableObject {
         switch p.type {
         case .skjolding:  return skjoldingDests(for: p)
         case .berserker:  return berserkerDests(for: p)
+        case .spearman:   return spearmanDests(for: p)
         default:          return slidingDests(for: p)
         }
     }
@@ -245,6 +246,55 @@ class GameState: ObservableObject {
 
         // Direct sideways 1 step.
         for dc in [-1, 1] { _ = add(c + dc, r) }
+
+        return (moves, attacks)
+    }
+
+    // Spearman: expanding fan forward — diagonals at 1, 3-wide at 2, spread at 3 — plus 1 backward.
+    // Diagonal lanes slide (blocked by occupants); center lane requires (0,+1) transit to be empty.
+    // Outer range-3 squares (±2) route through the inner diagonal lane.
+    private func spearmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        let fwd = p.side == .red ? 1 : -1
+        let c = p.pos.col, r = p.pos.row
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        func add(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+                return false
+            }
+            moves.insert(pos)
+            return true
+        }
+
+        func occupied(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            return piece(at: Position(col: col, row: row)) != nil
+        }
+
+        // Diagonal lanes (±1 col): shieldwall at entry, then slide up to range 2,
+        // and if clear at range 2 the outer column at range 3 opens.
+        for dc in [-1, 1] {
+            if occupied(c, r + fwd) && occupied(c + dc, r) { continue }
+            if add(c + dc, r + fwd) {
+                if add(c + dc, r + 2 * fwd) {
+                    _ = add(c + 2 * dc, r + 3 * fwd)
+                }
+            }
+        }
+
+        // Center lane: range 2 and 3 (no range-1 destination — spear doesn't thrust straight 1).
+        // Blocked if the transit square at (c, r+fwd) is occupied.
+        if !occupied(c, r + fwd) {
+            if add(c, r + 2 * fwd) {
+                _ = add(c, r + 3 * fwd)
+            }
+        }
+
+        // 1 step directly backward.
+        _ = add(c, r - fwd)
 
         return (moves, attacks)
     }

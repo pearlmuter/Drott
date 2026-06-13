@@ -172,6 +172,7 @@ class GameState: ObservableObject {
         case .elf:        return elfDests(for: p)
         case .king:       return kingDests(for: p)
         case .dwarf:      return dwarfDests(for: p)
+        case .hunter:     return hunterDests(for: p)
         default:          return slidingDests(for: p)
         }
     }
@@ -381,6 +382,41 @@ class GameState: ObservableObject {
         }
 
         // Knight-shape moves — no jumping: blocked by a piece in the longer-axis direction.
+        for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
+            let transitCol = c + (abs(dc) > abs(dr) ? dc/2 : 0)
+            let transitRow = r + (abs(dr) > abs(dc) ? dr/2 : 0)
+            if occupied(transitCol, transitRow) { continue }
+            _ = add(c + dc, r + dr)
+        }
+
+        return (moves, attacks)
+    }
+
+    // Hunter: 1 step diagonally in any direction, plus knight-shape squares (no jumping).
+    private func hunterDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        let c = p.pos.col, r = p.pos.row
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        func add(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+                return false
+            }
+            moves.insert(pos)
+            return true
+        }
+
+        func occupied(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            return piece(at: Position(col: col, row: row)) != nil
+        }
+
+        // 1 step diagonally.
+        for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] { _ = add(c + dc, r + dr) }
+
+        // Knight-shape moves — no jumping: blocked by piece in the longer-axis direction.
         for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
             let transitCol = c + (abs(dc) > abs(dr) ? dc/2 : 0)
             let transitRow = r + (abs(dr) > abs(dc) ? dr/2 : 0)

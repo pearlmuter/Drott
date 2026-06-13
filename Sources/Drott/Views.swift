@@ -371,11 +371,17 @@ struct PieceToken: View {
     }
 
     private var nsImage: NSImage? {
-        // Try the SPM resource bundle first, then fall back to the source tree
+        // 1. Embedded in the .app bundle (Contents/Resources/Drott_Drott.bundle)
+        if let resURL = Bundle.main.resourceURL {
+            let url = resURL
+                .appendingPathComponent("Drott_Drott.bundle")
+                .appendingPathComponent("\(resourceName).png")
+            if let img = NSImage(contentsOf: url) { return img }
+        }
+        // 2. SPM build output (development — requires Desktop access)
         if let url = Bundle.module.url(forResource: resourceName, withExtension: "png"),
            let img = NSImage(contentsOf: url) { return img }
-        let fallback = "/Users/emil/Desktop/claudcode/Drott/pieces/\(resourceName).png"
-        return NSImage(contentsOfFile: fallback)
+        return nil
     }
 
     var body: some View {

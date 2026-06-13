@@ -172,7 +172,7 @@ class GameState: ObservableObject {
     }
 
     // Skjolding: 2 forward (if 1-forward clear), diagonal forward ×2, 1 backward.
-    // Shieldwall: diagonal is blocked when both adjacent orthogonal squares hold enemies.
+    // Shieldwall: diagonal is blocked when both adjacent orthogonal squares are occupied (any piece).
     private func skjoldingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
@@ -188,9 +188,9 @@ class GameState: ObservableObject {
             }
         }
 
-        func isEnemy(_ col: Int, _ row: Int) -> Bool {
+        func isOccupied(_ col: Int, _ row: Int) -> Bool {
             guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row))?.side == p.side.other
+            return piece(at: Position(col: col, row: row)) != nil
         }
 
         // 2 forward — only if the intervening square is empty
@@ -198,9 +198,9 @@ class GameState: ObservableObject {
             add(c, r + 2 * fwd)
         }
 
-        // diagonal forward (left and right) — blocked by shieldwall
+        // diagonal forward — shieldwall blocks when BOTH adjacent orthogonals are occupied (any piece)
         for dc in [-1, 1] {
-            if isEnemy(c, r + fwd) && isEnemy(c + dc, r) { continue }
+            if isOccupied(c, r + fwd) && isOccupied(c + dc, r) { continue }
             add(c + dc, r + fwd)
         }
 
@@ -229,10 +229,20 @@ class GameState: ObservableObject {
             return true
         }
 
-        // Three forward lanes.
-        for dc in [-1, 0, 1] {
+        func occupied(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            return piece(at: Position(col: col, row: row)) != nil
+        }
+
+        // Center lane: straight forward up to 3.
+        for step in 1...3 { guard add(c, r + step * fwd) else { break } }
+
+        // Side lanes: diagonal entry blocked by shieldwall (any two adjacent pieces).
+        for dc in [-1, 1] {
+            if occupied(c, r + fwd) && occupied(c + dc, r) { continue }
             for step in 1...3 { guard add(c + dc, r + step * fwd) else { break } }
         }
+
         // Direct sideways 1 step.
         for dc in [-1, 1] { _ = add(c + dc, r) }
 

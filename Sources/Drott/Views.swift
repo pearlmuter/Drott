@@ -127,7 +127,8 @@ struct SidePanel: View {
                     Divider().padding(.vertical, 2)
                     fieldLabel("BOARD")
                     legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85), label: "Castle (F6)")
-                    legendRow(color: Color(red: 0.55, green: 0.72, blue: 0.95).opacity(0.55), label: "Fort area")
+                    legendRow(color: Color(red: 0.86, green: 0.80, blue: 0.69), label: "Fort area")
+                    legendRow(color: Color(red: 0.94, green: 0.90, blue: 0.81), label: "Castle zone")
                     legendRow(color: .green.opacity(0.45), label: "Valid move")
                     legendRow(color: .orange.opacity(0.75), label: "Can attack")
                 }
@@ -142,7 +143,7 @@ struct SidePanel: View {
                             ForEach(game.log.reversed()) { entry in
                                 Text(entry.text)
                                     .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(logColor(for: entry))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -151,6 +152,11 @@ struct SidePanel: View {
                 }
             }
         }
+    }
+
+    private func logColor(for entry: LogEntry) -> Color {
+        guard let s = entry.side else { return .secondary }
+        return s == .red ? .red : .primary
     }
 
     // MARK: Rules tab
@@ -163,16 +169,16 @@ struct SidePanel: View {
                     rulesSection("HOW TO WIN") {
                         """
                         1. Capture the opponent's King.
-                        2. Move any piece into the opponent's Fort (blue area) and survive until your next turn.
-                        3. March your King into the Castle (F6) and survive until your next turn. Checking a King already in the Castle won't help — he wins on his next turn regardless.
+                        2. Move your King onto the Castle (F6, centre) and survive until it is your turn again.
+                        3. Have at least one of your pieces in the opponent's fort while they have no pieces in their own fort.
                         """
                     }
 
                     rulesSection("MOVEMENT") {
                         """
                         • All pieces move in a straight line to their destination.
-                        • No piece may jump over another.
-                        • Shieldwall: two pieces standing adjacent to each other (orthogonally or diagonally) block anything from sliding between them.
+                        • No piece may jump over another (except the shieldwall rule below).
+                        • Shieldwall: two pieces standing orthogonally adjacent to a diagonal path block that path.
                         • Capture by landing on the enemy's square. The captured piece is removed.
                         """
                     }
@@ -187,27 +193,23 @@ struct SidePanel: View {
                         """
                         K   King — must be protected. Can enter the Castle to win.
                         Sp  Spearman — limited retreat.
-                        Bw  Bowman — long range; limited retreat. Good for covering the Castle from afar.
-                        Bk  Berserker — wide field of action; good at chasing the King. Limited retreat. Best used to support Skjolding advances early.
-                        El  Elf — dynamic; pairs with Wolf. Works well on the flanks.
-                        Wo  Wolf — dynamic; pairs with Elf.
-                        Dw  Dwarf — pairs with Hunter.
-                        Hu  Hunter — pairs with Dwarf.
+                        Bw  Bowman — long range; limited retreat.
+                        Bk  Berserker — wide field of action. Limited retreat.
+                        El  Elf — king moves or diagonal slide up to 4.
+                        Wo  Wolf — orthogonal slide up to 3.
+                        Dw  Dwarf — short orthogonal/diagonal + knight shape (no jump).
+                        Hu  Hunter — diagonal step + knight shape (no jump).
                         """
                     }
 
                     rulesSection("STRATEGY NOTES") {
                         """
-                        • Control the centre to limit the opponent's King from approaching the Castle easily.
+                        • Control the centre to limit the opponent's King from approaching the Castle.
                         • Develop officers early so flanks aren't open.
                         • Double-advance: officers work best in tandem (Wolf+Elf, Hunter+Dwarf).
                         • King advance can be a winning threat — but leaves your own Fort exposed.
                         • Material advantage? Attack both flanks at once — one must give.
                         """
-                    }
-
-                    rulesSection("NOTE") {
-                        "Movement ranges per piece are not yet enforced in this app — any straight-line move is currently permitted. To be added."
                     }
                 }
                 .padding(.bottom, 4)
@@ -279,8 +281,8 @@ struct BoardView: View {
                                 SquareView(
                                     pos: pos,
                                     piece: game.piece(at: pos),
-                                    isSelected:    game.selected == pos,
-                                    isMoveTarget:  game.highlightMoves.contains(pos),
+                                    isSelected:     game.selected == pos,
+                                    isMoveTarget:   game.highlightMoves.contains(pos),
                                     isAttackTarget: game.highlightAttacks.contains(pos)
                                 )
                                 .onTapGesture { game.tap(pos) }
@@ -288,7 +290,8 @@ struct BoardView: View {
                         }
                     }
                 }
-                .border(Color(red: 0.28, green: 0.18, blue: 0.08).opacity(0.7), width: 2)
+                .background(Color(red: 0.16, green: 0.16, blue: 0.18))
+                .cornerRadius(4)
 
                 // Column labels  A … K
                 HStack(spacing: 0) {
@@ -313,48 +316,113 @@ struct SquareView: View {
     let isMoveTarget: Bool
     let isAttackTarget: Bool
 
-    private var bg: Color {
-        if isSelected           { return .green.opacity(0.55) }
-        if pos == .castle       { return Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85) }
-        if Position.isFort(pos) { return Color(red: 0.55, green: 0.72, blue: 0.95).opacity(0.55) }
-        let light = (pos.col + pos.row) % 2 == 0
-        return light
-            ? Color(red: 0.94, green: 0.88, blue: 0.77)
-            : Color(red: 0.56, green: 0.42, blue: 0.28)
+    private static let normalBeige = Color(red: 0.94, green: 0.90, blue: 0.81)
+    private static let fortBeige   = Color(red: 0.86, green: 0.80, blue: 0.69)
+    private static let castleGold  = Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85)
+    private static let textureBrown = Color(red: 0.35, green: 0.22, blue: 0.08)
+
+    private var squareBase: Color {
+        if pos == .castle       { return Self.castleGold }
+        if Position.isFort(pos) { return Self.fortBeige }
+        return Self.normalBeige
     }
 
     var body: some View {
         ZStack {
-            Rectangle().fill(bg)
+            // Tile: rounded rect with shadow, 1px gap on each side
+            ZStack {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(squareBase)
 
-            // Move target: green dot on empty squares
-            if isMoveTarget && piece == nil {
-                Circle()
-                    .fill(Color.green.opacity(0.55))
-                    .frame(width: SQ * 0.30, height: SQ * 0.30)
-            }
+                // Castle zone: dot texture
+                if Position.isCastleZone(pos) && pos != .castle {
+                    castleZoneDots
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
 
-            if let p = piece {
-                PieceToken(piece: p)
-            } else if !isMoveTarget {
-                VStack { Spacer()
-                    HStack { Spacer()
-                        Text(pos.description)
-                            .font(.system(size: 7))
-                            .foregroundColor(.black.opacity(0.18))
-                            .padding(2)
+                // Fort: diagonal line texture
+                if Position.isFort(pos) {
+                    fortDiagonals
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+
+                // Selection tint
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.green.opacity(0.42))
+                }
+
+                // Move dot on empty squares
+                if isMoveTarget && piece == nil {
+                    Circle()
+                        .fill(Color.green.opacity(0.55))
+                        .frame(width: (SQ - 2) * 0.30, height: (SQ - 2) * 0.30)
+                }
+
+                // Piece or coordinate label
+                if let p = piece {
+                    PieceToken(piece: p)
+                } else if !isMoveTarget {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text(pos.description)
+                                .font(.system(size: 7))
+                                .foregroundColor(Color(red: 0.35, green: 0.22, blue: 0.08).opacity(0.22))
+                                .padding(2)
+                        }
                     }
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 2)
+            .frame(width: SQ - 2, height: SQ - 2)
 
-            // Attack target: orange ring around the whole square
+            // Attack ring outside tile
             if isAttackTarget {
-                Rectangle()
-                    .stroke(Color.orange, lineWidth: 2.5)
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.orange, lineWidth: 2)
+                    .frame(width: SQ - 2, height: SQ - 2)
             }
         }
         .frame(width: SQ, height: SQ)
-        .overlay(Rectangle().stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+    }
+
+    // Dot grid for castle zone
+    private var castleZoneDots: some View {
+        Canvas { ctx, size in
+            let spacing: CGFloat = 7
+            let r: CGFloat = 0.9
+            var x = spacing / 2
+            while x < size.width {
+                var y = spacing / 2
+                while y < size.height {
+                    let rect = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
+                    ctx.fill(Path(ellipseIn: rect),
+                             with: .color(Self.textureBrown.opacity(0.20)))
+                    y += spacing
+                }
+                x += spacing
+            }
+        }
+    }
+
+    // Diagonal lines for fort squares
+    private var fortDiagonals: some View {
+        Canvas { ctx, size in
+            let spacing: CGFloat = 7
+            var offset: CGFloat = -size.height
+            while offset < size.width + size.height {
+                var path = Path()
+                path.move(to: CGPoint(x: offset, y: 0))
+                path.addLine(to: CGPoint(x: offset + size.height, y: size.height))
+                ctx.stroke(path,
+                           with: .color(Self.textureBrown.opacity(0.16)),
+                           lineWidth: 0.7)
+                offset += spacing
+            }
+        }
     }
 }
 
@@ -363,7 +431,6 @@ struct SquareView: View {
 struct PieceToken: View {
     let piece: Piece
 
-    // Filename in the bundle: e.g. "red_king", "black_pawn"
     private var resourceName: String {
         let side = piece.side.rawValue.lowercased()
         let name = piece.type == .skjolding ? "pawn" : piece.type.rawValue
@@ -371,14 +438,12 @@ struct PieceToken: View {
     }
 
     private var nsImage: NSImage? {
-        // 1. Embedded in the .app bundle (Contents/Resources/Drott_Drott.bundle)
         if let resURL = Bundle.main.resourceURL {
             let url = resURL
                 .appendingPathComponent("Drott_Drott.bundle")
                 .appendingPathComponent("\(resourceName).png")
             if let img = NSImage(contentsOf: url) { return img }
         }
-        // 2. SPM build output (development — requires Desktop access)
         if let url = Bundle.module.url(forResource: resourceName, withExtension: "png"),
            let img = NSImage(contentsOf: url) { return img }
         return nil
@@ -386,7 +451,6 @@ struct PieceToken: View {
 
     var body: some View {
         ZStack {
-            // White disc so piece icons read clearly on any square colour
             Circle()
                 .fill(Color.white)
                 .shadow(color: .black.opacity(0.30), radius: 2, x: 0, y: 1)
@@ -398,7 +462,6 @@ struct PieceToken: View {
                     .scaledToFit()
                     .frame(width: SQ * 0.68, height: SQ * 0.68)
             } else {
-                // Fallback text token for any piece without an image
                 Text(piece.type.symbol)
                     .font(.system(size: SQ * 0.24, weight: .bold, design: .rounded))
                     .foregroundColor(piece.side == .red

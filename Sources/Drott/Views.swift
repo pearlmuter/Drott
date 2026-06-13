@@ -65,13 +65,21 @@ struct SidePanel: View {
             // Turn / Winner
             infoCard {
                 HStack(spacing: 8) {
-                    let side = game.winner ?? game.turn
-                    Circle()
-                        .fill(side == .red ? Color.red : Color.primary)
-                        .frame(width: 13, height: 13)
-                    VStack(alignment: .leading, spacing: 1) {
-                        fieldLabel(game.winner != nil ? "WINNER" : "TURN")
-                        Text(side.rawValue).font(.title3.weight(.semibold))
+                    if game.isDrawShown {
+                        Circle().fill(Color.secondary).frame(width: 13, height: 13)
+                        VStack(alignment: .leading, spacing: 1) {
+                            fieldLabel("RESULT")
+                            Text("Draw").font(.title3.weight(.semibold))
+                        }
+                    } else {
+                        let side = game.winner ?? game.turn
+                        Circle()
+                            .fill(side == .red ? Color.red : Color.primary)
+                            .frame(width: 13, height: 13)
+                        VStack(alignment: .leading, spacing: 1) {
+                            fieldLabel(game.winner != nil ? "WINNER" : "TURN")
+                            Text(side.rawValue).font(.title3.weight(.semibold))
+                        }
                     }
                     Spacer()
                     if game.thinking {
@@ -251,6 +259,7 @@ struct SidePanel: View {
     }
 
     private var evalText: String {
+        if game.isDrawShown { return "Draw" }
         guard game.evalEnabled, let s = game.evalRed else { return "–" }
         let decisive = Engine.mate - Engine.maxDepth
         if s >=  decisive { return "Red wins" }
@@ -308,6 +317,7 @@ struct SidePanel: View {
                     legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85), label: "Castle (F6)")
                     legendRow(color: Color(red: 0.86, green: 0.80, blue: 0.69), label: "Fort area")
                     legendRow(color: Color(red: 0.94, green: 0.90, blue: 0.81), label: "Castle zone")
+                    legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.30).opacity(0.45), label: "Last move")
                     legendRow(color: .green.opacity(0.45), label: "Valid move")
                     legendRow(color: .orange.opacity(0.75), label: "Can attack")
                 }
@@ -335,7 +345,12 @@ struct SidePanel: View {
                         }
                     }
 
-                    if let w = game.winner {
+                    if game.isDrawShown {
+                        Text("Draw — threefold repetition")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
+                    } else if let w = game.winner {
                         Text(game.winMessage(for: w, reason: game.winReason))
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(w == .red ? .red : .primary)
@@ -359,6 +374,8 @@ struct SidePanel: View {
                 .foregroundStyle(entry.side == .red ? .red : .primary)
             if entry.reason != nil {
                 Text("#").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+            } else if game.drawPly == idx + 1 {
+                Text("=").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -509,7 +526,8 @@ struct BoardView: View {
     }
 
     private var grid: some View {
-        VStack(spacing: 0) {
+        let last = game.lastMove
+        return VStack(spacing: 0) {
             ForEach((0..<11).reversed(), id: \.self) { row in
                 HStack(spacing: 0) {
                     ForEach(0..<11, id: \.self) { col in
@@ -520,7 +538,8 @@ struct BoardView: View {
                             isSelected:     game.selected == pos,
                             isMoveTarget:   game.highlightMoves.contains(pos),
                             isAttackTarget: game.highlightAttacks.contains(pos),
-                            isDragOrigin:   game.dragOrigin == pos
+                            isDragOrigin:   game.dragOrigin == pos,
+                            isLastMove:     last.map { $0.from == pos || $0.to == pos } ?? false
                         )
                         .onTapGesture { game.tap(pos) }
                         .gesture(
@@ -604,6 +623,7 @@ struct SquareView: View {
     let isMoveTarget: Bool
     let isAttackTarget: Bool
     var isDragOrigin: Bool = false
+    var isLastMove: Bool = false
 
     private static let normalBeige = Color(red: 0.94, green: 0.90, blue: 0.81)
     private static let fortBeige   = Color(red: 0.86, green: 0.80, blue: 0.69)
@@ -633,6 +653,12 @@ struct SquareView: View {
                 if Position.isFort(pos) {
                     fortDiagonals
                         .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+
+                // Last move played (from & to squares): soft yellow wash.
+                if isLastMove && !isSelected {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color(red: 1.0, green: 0.85, blue: 0.30).opacity(0.45))
                 }
 
                 // Selection tint

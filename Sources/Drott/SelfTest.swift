@@ -44,6 +44,7 @@ enum SelfTest {
         kingCaptureTactic()
         fortControl()
         castleHold()
+        threefold()
         dragMath()
         engineSanity()
         selfPlayStress()
@@ -156,6 +157,40 @@ enum SelfTest {
         let resolved = onCastle.applying(blackMove)
         check(resolved.winner == .red, "red wins by holding the castle after black's reply")
         check(resolved.winReason == .castle, "win reason is castle")
+    }
+
+    // A position seen three times is a draw. Two kings shuffle a 4-ply cycle
+    // twice; the start position then occurs at plies 0, 4, 8 → threefold at 8.
+    private static func threefold() {
+        print("[threefold repetition]")
+        var b = Board.empty()
+        b.put(.king, .red, Position(col: 0, row: 0))     // A1
+        b.put(.king, .black, Position(col: 10, row: 10)) // K11
+        b.sideToMove = .red
+
+        let cycle = [
+            Move(from: Position(col: 0, row: 0),   to: Position(col: 1, row: 0),   isCapture: false),
+            Move(from: Position(col: 10, row: 10), to: Position(col: 9, row: 10),  isCapture: false),
+            Move(from: Position(col: 1, row: 0),   to: Position(col: 0, row: 0),   isCapture: false),
+            Move(from: Position(col: 9, row: 10),  to: Position(col: 10, row: 10), isCapture: false),
+        ]
+
+        var history = [b]
+        var drawAt: Int? = nil
+        for _ in 0..<2 {
+            for mv in cycle {
+                b = b.applying(mv)
+                history.append(b)
+                if drawAt == nil, GameState.isThreefoldRepetition(in: history) {
+                    drawAt = history.count - 1
+                }
+            }
+        }
+        check(drawAt == 8, "threefold detected at ply 8 (got \(drawAt.map(String.init) ?? "nil"))")
+
+        // A position seen only twice is not yet a draw.
+        let twice = Array(history.prefix(5))   // start seen at 0 and 4
+        check(!GameState.isThreefoldRepetition(in: twice), "twice-seen position is not a draw")
     }
 
     // Drag-and-drop coordinate mapping: a drop's target square must match the

@@ -102,6 +102,7 @@ enum WinReason { case kingCapture, castle, fort }
 /// `record[i]` is the move that produced `history[i+1]`.
 struct MoveRecord: Identifiable {
     let id = UUID()
+    let move: Move
     let notation: String
     let side: Side
     let reason: WinReason?   // set if this move ended the game
@@ -608,6 +609,10 @@ class GameState: ObservableObject {
     /// True while self-play / replay is auto-advancing.
     @Published var isPlaying = false
 
+    /// History index at which the game was drawn by threefold repetition (nil =
+    /// no draw). The draw is shown only when viewing that final position.
+    @Published var drawPly: Int? = nil
+
     // Drag-to-move state (nil origin = no drag in progress).
     @Published var dragOrigin: Position? = nil
     @Published var dragTranslation: CGSize = .zero
@@ -635,8 +640,22 @@ class GameState: ObservableObject {
     var canStepBack: Bool { viewIndex > 0 }
     var canStepForward: Bool { viewIndex < history.count - 1 }
 
+    /// The game has ended (a side won, or it was drawn).
+    var isGameOver: Bool { liveBoard.winner != nil || drawPly != nil }
+    /// True when the viewed position is the drawn final position.
+    var isDrawShown: Bool { drawPly != nil && viewIndex == drawPly }
+
+    /// The move that produced the currently-viewed position (for highlighting).
+    var lastMove: Move? { viewIndex >= 1 ? record[viewIndex - 1].move : nil }
+
     /// The piece currently being dragged (on the live board), if any.
     var draggedPiece: Piece? { dragOrigin.flatMap { liveBoard.piece(at: $0) } }
+
+    /// True if the latest position in `history` has occurred three times.
+    static func isThreefoldRepetition(in history: [Board]) -> Bool {
+        guard let last = history.last else { return false }
+        return history.reduce(0) { $0 + ($1 == last ? 1 : 0) } >= 3
+    }
 
     init() { reset() }
 
@@ -648,6 +667,7 @@ class GameState: ObservableObject {
         history = [Board()]
         viewIndex = 0
         record = []
+        drawPly = nil
         selected = nil
         highlightMoves = []
         highlightAttacks = []
@@ -670,7 +690,7 @@ class GameState: ObservableObject {
 
     func tap(_ pos: Position) {
         // Taps only act on the live position, for a human-controlled side.
-        guard atLatest, liveBoard.winner == nil, !thinking else { return }
+        guard atLatest, !isGameOver, !thinking else { return }
         guard controller(of: liveBoard.sideToMove) == .human else { return }
 
         let tapped = liveBoard.piece(at: pos)
@@ -698,7 +718,7 @@ class GameState: ObservableObject {
     /// Called continuously as a piece is dragged. Picks up the piece on first
     /// movement (lighting up its legal targets) and tracks the cursor offset.
     func dragChanged(from pos: Position, translation: CGSize) {
-        guard atLatest, liveBoard.winner == nil, !thinking else { return }
+        guard atLatest, !isGameOver, !thinking else { return }
         guard controller(of: liveBoard.sideToMove) == .human else { return }
 
         if dragOrigin == nil {
@@ -749,6 +769,11 @@ class GameState: ObservableObject {
         let turn = board.sideToMove
         analysisTurn = turn
 
+        if isDrawShown {
+            evalRed = 0
+            analysis = nil
+            return
+        }
         if let w = board.winner {
             evalRed = (w == .red) ? Engine.mate : -Engine.mate
             analysis = nil
@@ -804,7 +829,7 @@ class GameState: ObservableObject {
         // Nothing to advance toward: at the live end with no computer move due.
         if atLatest {
             let live = liveBoard
-            let canGenerate = live.winner == nil && controller(of: live.sideToMove) == .computer
+            let canGenerate = !isGameOver && controller(of: live.sideToMove) == .computer
             if !canGenerate { return }
         }
         isPlaying = true
@@ -865,7 +890,7 @@ class GameState: ObservableObject {
 
         // At the live end — generate the next move if a computer is to move.
         let live = liveBoard
-        guard live.winner == nil, controller(of: live.sideToMove) == .computer, !thinking else {
+        guard !isGameOver, controller(of: live.sideToMove) == .computer, !thinking else {
             isPlaying = false
             return
         }
@@ -889,13 +914,19 @@ class GameState: ObservableObject {
         let wasAtLatest = atLatest
         let newBoard = live.applying(move)
         history.append(newBoard)
-        record.append(MoveRecord(notation: notation, side: mover.side, reason: newBoard.winReason))
+        record.append(MoveRecord(move: move, notation: notation, side: mover.side,
+                                 reason: newBoard.winReason))
+
+        // Threefold repetition is a draw.
+        if newBoard.winner == nil, GameState.isThreefoldRepetition(in: history) {
+            drawPly = history.count - 1
+        }
 
         // Follow the live game unless the user is scrubbing the past.
         if wasAtLatest { viewIndex = history.count - 1 }
         clearSelection()
 
-        if newBoard.winner != nil {
+        if isGameOver {
             isPlaying = false
             return
         }
@@ -917,8 +948,7 @@ class GameState: ObservableObject {
     /// computer's turn. (Self-play is driven by `advanceLoop` instead.)
     private func maybeScheduleReply() {
         guard opponent == .computerBlack || opponent == .computerRed else { return }
-        let live = liveBoard
-        guard live.winner == nil, controller(of: live.sideToMove) == .computer, !thinking else { return }
+        guard !isGameOver, controller(of: liveBoard.sideToMove) == .computer, !thinking else { return }
         generateEngineMove(minStep: 0.15) { [weak self] in
             self?.maybeScheduleReply()
         }
@@ -942,7 +972,7 @@ class GameState: ObservableObject {
                 guard let self else { return }
                 self.thinking = false
                 // Drop a stale result (game reset or rewound during the search).
-                guard self.liveBoard == snapshot, self.liveBoard.winner == nil else { return }
+                guard self.liveBoard == snapshot, !self.isGameOver else { return }
                 if let mv = chosen { self.perform(mv) }
                 then?()
             }
@@ -1017,7 +1047,7 @@ class GameState: ObservableObject {
             stepForward()
         case "go":
             // Force a single engine move for the side to move (for testing).
-            guard atLatest, liveBoard.winner == nil, !thinking else { return }
+            guard atLatest, !isGameOver, !thinking else { return }
             generateEngineMove(minStep: 0)
         default:
             break

@@ -169,6 +169,7 @@ class GameState: ObservableObject {
         case .berserker:  return berserkerDests(for: p)
         case .spearman:   return spearmanDests(for: p)
         case .wolf:       return wolfDests(for: p)
+        case .elf:        return elfDests(for: p)
         default:          return slidingDests(for: p)
         }
     }
@@ -294,6 +295,38 @@ class GameState: ObservableObject {
                 col += dc; row += dr
             }
         }
+        return (moves, attacks)
+    }
+
+    // Elf: 1 step orthogonally in any direction (king-like), plus diagonal slide up to 4 steps.
+    private func elfDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        func add(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+                return false
+            }
+            moves.insert(pos)
+            return true
+        }
+
+        // Orthogonal: 1 step each direction.
+        for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] {
+            _ = add(p.pos.col + dc, p.pos.row + dr)
+        }
+
+        // Diagonal: slide up to 4 steps each direction.
+        for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
+            var col = p.pos.col + dc, row = p.pos.row + dr
+            for _ in 1...4 {
+                guard add(col, row) else { break }
+                col += dc; row += dr
+            }
+        }
+
         return (moves, attacks)
     }
 

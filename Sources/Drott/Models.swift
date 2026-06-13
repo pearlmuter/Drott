@@ -93,10 +93,21 @@ enum WinReason { case kingCapture, castle, fort }
 
 // MARK: - Log
 
-struct LogEntry: Identifiable {
+/// One played move, recorded for the move list and history navigation.
+/// `record[i]` is the move that produced `history[i+1]`.
+struct MoveRecord: Identifiable {
     let id = UUID()
-    let text: String
-    let side: Side?   // nil = system message
+    let notation: String
+    let side: Side
+    let reason: WinReason?   // set if this move ended the game
+}
+
+/// Who controls each side.
+enum OpponentMode: Hashable {
+    case off            // two humans
+    case computerBlack  // computer plays Black
+    case computerRed    // computer plays Red
+    case selfPlay       // computer plays both
 }
 
 // MARK: - Board
@@ -551,102 +562,232 @@ struct Board {
 // drives the AI opponent. All rules and win logic live in `Board`.
 
 class GameState: ObservableObject {
-    @Published var board = Board()
+    /// All positions from the start to the latest played move.
+    /// `history[0]` is the opening; `history[i+1]` follows `record[i]`.
+    @Published var history: [Board] = [Board()]
+    /// Index of the position currently shown on the board.
+    @Published var viewIndex: Int = 0
+    /// One entry per played move, aligned so `record[i]` produced `history[i+1]`.
+    @Published var record: [MoveRecord] = []
+
     @Published var selected: Position?             = nil
     @Published var highlightMoves: Set<Position>   = []
     @Published var highlightAttacks: Set<Position> = []
-    @Published var log: [LogEntry]                 = []
 
-    /// Which side the computer plays (nil = two humans).
-    @Published var aiSide: Side? = nil
+    /// Who controls each side.
+    @Published var opponent: OpponentMode = .off
     /// Search time budget per move, in seconds.
     @Published var thinkTime: Double = 1.2
+    /// Minimum seconds between moves during self-play / replay.
+    @Published var stepDelay: Double = 1.0
     /// True while the engine is searching.
     @Published var thinking = false
+    /// True while self-play / replay is auto-advancing.
+    @Published var isPlaying = false
 
-    var turn: Side             { board.sideToMove }
-    var winner: Side?          { board.winner }
-    var castleWinPending: Side? { board.castleWinPending }
+    /// The live game position (where new moves are appended).
+    var liveBoard: Board { history[history.count - 1] }
+    /// The position currently displayed (may be in the past while scrubbing).
+    var viewedBoard: Board { history[viewIndex] }
+
+    /// Display helpers read the *viewed* board so scrubbing reflects the past.
+    var turn: Side          { viewedBoard.sideToMove }
+    var winner: Side?       { viewedBoard.winner }
+    var winReason: WinReason? { viewedBoard.winReason }
+
+    var atLatest: Bool { viewIndex == history.count - 1 }
+    var canStepBack: Bool { viewIndex > 0 }
+    var canStepForward: Bool { viewIndex < history.count - 1 }
 
     init() { reset() }
 
     // MARK: Public API
 
     func reset() {
-        board = Board()
+        isPlaying = false
+        thinking = false
+        history = [Board()]
+        viewIndex = 0
+        record = []
         selected = nil
         highlightMoves = []
         highlightAttacks = []
-        log = []
-        thinking = false
-        addLog("Game started.")
-        maybeTriggerAI()
+        if opponent == .selfPlay {
+            play()
+        } else {
+            maybeScheduleReply()
+        }
     }
 
-    func piece(at pos: Position) -> Piece? { board.piece(at: pos) }
+    func piece(at pos: Position) -> Piece? { viewedBoard.piece(at: pos) }
 
     func validDestinations(for p: Piece) -> (Set<Position>, Set<Position>) {
-        board.validDestinations(for: p)
+        liveBoard.validDestinations(for: p)
     }
 
     func tap(_ pos: Position) {
-        guard winner == nil, !thinking else { return }
-        // While the computer owns the side to move, ignore board taps.
-        if aiSide == turn { return }
+        // Taps only act on the live position, for a human-controlled side.
+        guard atLatest, liveBoard.winner == nil, !thinking else { return }
+        guard controller(of: liveBoard.sideToMove) == .human else { return }
 
-        let tapped = piece(at: pos)
+        let tapped = liveBoard.piece(at: pos)
+        let stm = liveBoard.sideToMove
         if let sel = selected {
             if sel == pos {
                 selected = nil
-            } else if let t = tapped, t.side == turn {
+            } else if let t = tapped, t.side == stm {
                 selected = pos
-            } else if let p = piece(at: sel) {
-                let (m, a) = validDestinations(for: p)
+            } else if let p = liveBoard.piece(at: sel) {
+                let (m, a) = liveBoard.validDestinations(for: p)
                 if m.contains(pos) || a.contains(pos) {
                     perform(Move(from: sel, to: pos, isCapture: a.contains(pos)))
+                    return
                 }
             }
-        } else if let t = tapped, t.side == turn {
+        } else if let t = tapped, t.side == stm {
             selected = pos
         }
         updateHighlights()
     }
 
-    /// Choose the side the computer plays (nil = humans). Triggers the engine if
-    /// it is now the computer's turn.
-    func setAI(_ side: Side?) {
-        aiSide = side
-        maybeTriggerAI()
+    // MARK: Mode
+
+    func setOpponent(_ mode: OpponentMode) {
+        opponent = mode
+        selected = nil
+        highlightMoves = []
+        highlightAttacks = []
+        if mode == .selfPlay {
+            play()                 // start watching immediately
+        } else {
+            isPlaying = false
+            jumpToLatest()
+            maybeScheduleReply()   // single reply if it's now the computer's turn
+        }
+    }
+
+    private enum Controller { case human, computer }
+
+    private func controller(of side: Side) -> Controller {
+        switch opponent {
+        case .off:           return .human
+        case .computerBlack: return side == .black ? .computer : .human
+        case .computerRed:   return side == .red ? .computer : .human
+        case .selfPlay:      return .computer
+        }
+    }
+
+    // MARK: Playback controls
+
+    func togglePlay() { isPlaying ? pause() : play() }
+
+    func play() {
+        guard !isPlaying else { return }
+        // Nothing to advance toward: at the live end with no computer move due.
+        if atLatest {
+            let live = liveBoard
+            let canGenerate = live.winner == nil && controller(of: live.sideToMove) == .computer
+            if !canGenerate { return }
+        }
+        isPlaying = true
+        advanceLoop()
+    }
+
+    func pause() { isPlaying = false }
+
+    func stepBackward() {
+        pause()
+        if viewIndex > 0 { viewIndex -= 1 }
+        clearSelection()
+    }
+
+    func stepForward() {
+        if viewIndex < history.count - 1 { viewIndex += 1 }
+        clearSelection()
+    }
+
+    func jumpToStart() {
+        pause()
+        viewIndex = 0
+        clearSelection()
+    }
+
+    func jumpToLatest() {
+        viewIndex = history.count - 1
+        clearSelection()
+    }
+
+    /// Jump the view to a specific ply (0 = opening). Pauses auto-advance.
+    func jumpTo(ply: Int) {
+        pause()
+        viewIndex = max(0, min(history.count - 1, ply))
+        clearSelection()
+    }
+
+    private func clearSelection() {
+        selected = nil
+        highlightMoves = []
+        highlightAttacks = []
+    }
+
+    /// One step of auto-advance: replay a recorded move if the cursor is behind
+    /// the live position, otherwise generate the next self-play move (or stop).
+    private func advanceLoop() {
+        guard isPlaying else { return }
+
+        if viewIndex < history.count - 1 {
+            // Replay forward through already-recorded history at a watchable pace.
+            DispatchQueue.main.asyncAfter(deadline: .now() + stepDelay) { [weak self] in
+                guard let self, self.isPlaying else { return }
+                if self.viewIndex < self.history.count - 1 { self.viewIndex += 1 }
+                self.advanceLoop()
+            }
+            return
+        }
+
+        // At the live end — generate the next move if a computer is to move.
+        let live = liveBoard
+        guard live.winner == nil, controller(of: live.sideToMove) == .computer, !thinking else {
+            isPlaying = false
+            return
+        }
+        generateEngineMove(minStep: stepDelay) { [weak self] in
+            self?.advanceLoop()
+        }
     }
 
     // MARK: Move execution
 
     private func perform(_ move: Move) {
-        guard let mover = board.piece(at: move.from) else { selected = nil; return }
-        if let blocker = board.piece(at: move.to), blocker.side == mover.side {
-            selected = nil; return
+        let live = liveBoard
+        guard let mover = live.piece(at: move.from) else { clearSelection(); return }
+        if let blocker = live.piece(at: move.to), blocker.side == mover.side {
+            clearSelection(); return
         }
 
-        // Chess-style notation, computed before the board mutates.
+        // Chess-style notation, computed before the board changes.
         let sym = mover.type == .skjolding ? "" : mover.type.symbol
-        let cap = board.piece(at: move.to) != nil
+        let cap = live.piece(at: move.to) != nil
         var notation = sym.isEmpty ? "\(move.from)" : "\(sym) \(move.from)"
         notation += cap ? "×\(move.to)" : "-\(move.to)"
 
-        board = board.applying(move)
-        addLog(notation, side: mover.side)
-        selected = nil
-        highlightMoves = []
-        highlightAttacks = []
+        let wasAtLatest = atLatest
+        let newBoard = live.applying(move)
+        history.append(newBoard)
+        record.append(MoveRecord(notation: notation, side: mover.side, reason: newBoard.winReason))
 
-        if let w = board.winner {
-            addLog(winMessage(for: w, reason: board.winReason), side: nil)
+        // Follow the live game unless the user is scrubbing the past.
+        if wasAtLatest { viewIndex = history.count - 1 }
+        clearSelection()
+
+        if newBoard.winner != nil {
+            isPlaying = false
             return
         }
-        maybeTriggerAI()
+        maybeScheduleReply()
     }
 
-    private func winMessage(for side: Side, reason: WinReason?) -> String {
+    func winMessage(for side: Side, reason: WinReason?) -> String {
         switch reason {
         case .kingCapture: return "\(side.rawValue) wins — king captured!"
         case .castle:      return "\(side.rawValue) wins — king holds the castle!"
@@ -657,19 +798,36 @@ class GameState: ObservableObject {
 
     // MARK: AI
 
-    private func maybeTriggerAI() {
-        guard winner == nil, let ai = aiSide, turn == ai, !thinking else { return }
+    /// In single-computer modes, reply to the human as soon as it is the
+    /// computer's turn. (Self-play is driven by `advanceLoop` instead.)
+    private func maybeScheduleReply() {
+        guard opponent == .computerBlack || opponent == .computerRed else { return }
+        let live = liveBoard
+        guard live.winner == nil, controller(of: live.sideToMove) == .computer, !thinking else { return }
+        generateEngineMove(minStep: 0.15) { [weak self] in
+            self?.maybeScheduleReply()
+        }
+    }
+
+    /// Search the live position off the main thread, enforce a minimum elapsed
+    /// time so playback stays watchable, then apply the move and call `then`.
+    private func generateEngineMove(minStep: Double, then: (() -> Void)? = nil) {
+        guard !thinking else { return }
         thinking = true
-        let snapshot = board
+        let snapshot = liveBoard
         let budget = thinkTime
+        let start = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let best = Engine.bestMove(for: snapshot, timeLimit: budget)
+            let elapsed = Date().timeIntervalSince(start)
+            if elapsed < minStep { Thread.sleep(forTimeInterval: minStep - elapsed) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.thinking = false
-                // Ignore a stale result if the game was reset mid-search.
-                guard self.board == snapshot, self.winner == nil else { return }
+                // Drop a stale result (game reset or rewound during the search).
+                guard self.liveBoard == snapshot, self.liveBoard.winner == nil else { return }
                 if let mv = best { self.perform(mv) }
+                then?()
             }
         }
     }
@@ -677,21 +835,17 @@ class GameState: ObservableObject {
     // MARK: Highlights
 
     private func updateHighlights() {
-        guard let sel = selected, let p = piece(at: sel) else {
+        guard let sel = selected, let p = liveBoard.piece(at: sel) else {
             highlightMoves = []; highlightAttacks = []; return
         }
-        let (m, a) = validDestinations(for: p)
+        let (m, a) = liveBoard.validDestinations(for: p)
         highlightMoves = m; highlightAttacks = a
-    }
-
-    private func addLog(_ text: String, side: Side? = nil) {
-        log.append(LogEntry(text: text, side: side))
-        if log.count > 200 { log.removeFirst() }
     }
 
     // MARK: File-based command interface
     // Write commands to /tmp/drott_cmd.txt:
-    //   "tap F6" · "reset" · "ai black" · "ai red" · "ai off" · "go"
+    //   "tap F6" · "reset" · "ai black|red|off" · "self" · "play" · "pause"
+    //   "back" · "fwd" · "go"
 
     func startCommandListener() {
         let path = "/tmp/drott_cmd.txt"
@@ -724,25 +878,24 @@ class GameState: ObservableObject {
             reset()
         case "ai":
             switch parts.dropFirst().first {
-            case "red":   setAI(.red)
-            case "black": setAI(.black)
-            default:      setAI(nil)
+            case "red":   setOpponent(.computerRed)
+            case "black": setOpponent(.computerBlack)
+            default:      setOpponent(.off)
             }
+        case "self":
+            setOpponent(.selfPlay)
+        case "play":
+            play()
+        case "pause":
+            pause()
+        case "back":
+            stepBackward()
+        case "fwd":
+            stepForward()
         case "go":
             // Force a single engine move for the side to move (for testing).
-            guard winner == nil, !thinking else { return }
-            thinking = true
-            let snapshot = board
-            let budget = thinkTime
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let best = Engine.bestMove(for: snapshot, timeLimit: budget)
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.thinking = false
-                    guard self.board == snapshot, self.winner == nil else { return }
-                    if let mv = best { self.perform(mv) }
-                }
-            }
+            guard atLatest, liveBoard.winner == nil, !thinking else { return }
+            generateEngineMove(minStep: 0)
         default:
             break
         }

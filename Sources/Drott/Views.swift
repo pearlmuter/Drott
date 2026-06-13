@@ -55,26 +55,6 @@ struct ContentView: View {
 
 private enum SideTab { case game, rules }
 
-/// Maps the opponent segmented control to `GameState.aiSide`.
-private enum OpponentChoice: Hashable {
-    case human, cpuBlack, cpuRed
-
-    init(aiSide: Side?) {
-        switch aiSide {
-        case .red:   self = .cpuRed
-        case .black: self = .cpuBlack
-        case nil:    self = .human
-        }
-    }
-    var aiSide: Side? {
-        switch self {
-        case .human:    return nil
-        case .cpuBlack: return .black
-        case .cpuRed:   return .red
-        }
-    }
-}
-
 struct SidePanel: View {
     @ObservedObject var game: GameState
     @State private var tab: SideTab = .game
@@ -108,16 +88,17 @@ struct SidePanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     fieldLabel("COMPUTER PLAYS")
                     Picker("", selection: Binding(
-                        get: { OpponentChoice(aiSide: game.aiSide) },
-                        set: { game.setAI($0.aiSide) }
+                        get: { game.opponent },
+                        set: { game.setOpponent($0) }
                     )) {
-                        Text("Off").tag(OpponentChoice.human)
-                        Text("Black").tag(OpponentChoice.cpuBlack)
-                        Text("Red").tag(OpponentChoice.cpuRed)
+                        Text("Off").tag(OpponentMode.off)
+                        Text("Black").tag(OpponentMode.computerBlack)
+                        Text("Red").tag(OpponentMode.computerRed)
+                        Text("Self").tag(OpponentMode.selfPlay)
                     }
                     .pickerStyle(.segmented)
 
-                    if game.aiSide != nil {
+                    if game.opponent != .off {
                         fieldLabel("STRENGTH")
                         Picker("", selection: Binding(
                             get: { game.thinkTime },
@@ -129,8 +110,24 @@ struct SidePanel: View {
                         }
                         .pickerStyle(.segmented)
                     }
+
+                    if game.opponent == .selfPlay {
+                        fieldLabel("SPEED")
+                        Picker("", selection: Binding(
+                            get: { game.stepDelay },
+                            set: { game.stepDelay = $0 }
+                        )) {
+                            Text("Slow").tag(2.0)
+                            Text("1×").tag(1.0)
+                            Text("Fast").tag(0.4)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                 }
             }
+
+            // Playback controls
+            playbackCard
 
             // Selected piece
             if let sel = game.selected, let p = game.piece(at: sel) {
@@ -165,6 +162,37 @@ struct SidePanel: View {
         }
     }
 
+    // MARK: Playback controls
+
+    private var playbackCard: some View {
+        infoCard {
+            VStack(spacing: 6) {
+                HStack(spacing: 4) {
+                    pbButton("backward.end.fill", enabled: game.canStepBack)  { game.jumpToStart() }
+                    pbButton("backward.fill",     enabled: game.canStepBack)  { game.stepBackward() }
+                    pbButton(game.isPlaying ? "pause.fill" : "play.fill", enabled: true) { game.togglePlay() }
+                    pbButton("forward.fill",      enabled: game.canStepForward) { game.stepForward() }
+                    pbButton("forward.end.fill",  enabled: game.canStepForward) { game.jumpToLatest() }
+                }
+                Text("Move \(game.viewIndex) / \(game.record.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func pbButton(_ symbol: String, enabled: Bool,
+                          action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12))
+                .frame(width: 30, height: 22)
+        }
+        .buttonStyle(.bordered)
+        .disabled(!enabled)
+    }
+
     // MARK: Game tab
 
     private var gameTab: some View {
@@ -191,29 +219,60 @@ struct SidePanel: View {
                 }
             }
 
-            // Move log
+            // Move list
             infoCard {
                 VStack(alignment: .leading, spacing: 4) {
-                    fieldLabel("LOG")
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(game.log.reversed()) { entry in
-                                Text(entry.text)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(logColor(for: entry))
+                    fieldLabel("MOVES")
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 1) {
+                                ForEach(Array(game.record.enumerated()), id: \.element.id) { idx, entry in
+                                    moveRow(idx: idx, entry: entry)
+                                        .id(idx)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 150)
+                        .onChange(of: game.viewIndex) { _ in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                proxy.scrollTo(game.viewIndex - 1, anchor: .center)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 120)
+
+                    if let w = game.winner {
+                        Text(game.winMessage(for: w, reason: game.winReason))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(w == .red ? .red : .primary)
+                            .padding(.top, 2)
+                    }
                 }
             }
         }
     }
 
-    private func logColor(for entry: LogEntry) -> Color {
-        guard let s = entry.side else { return .secondary }
-        return s == .red ? .red : .primary
+    @ViewBuilder
+    private func moveRow(idx: Int, entry: MoveRecord) -> some View {
+        let isCurrent = idx == game.viewIndex - 1
+        HStack(spacing: 6) {
+            Text("\(idx + 1).")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 24, alignment: .trailing)
+            Text(entry.notation)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(entry.side == .red ? .red : .primary)
+            if entry.reason != nil {
+                Text("#").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 1).padding(.horizontal, 4)
+        .background(isCurrent ? Color.accentColor.opacity(0.22) : Color.clear)
+        .cornerRadius(3)
+        .contentShape(Rectangle())
+        .onTapGesture { game.jumpTo(ply: idx + 1) }
     }
 
     // MARK: Rules tab

@@ -170,6 +170,8 @@ class GameState: ObservableObject {
         case .spearman:   return spearmanDests(for: p)
         case .wolf:       return wolfDests(for: p)
         case .elf:        return elfDests(for: p)
+        case .king:       return kingDests(for: p)
+        case .dwarf:      return dwarfDests(for: p)
         default:          return slidingDests(for: p)
         }
     }
@@ -325,6 +327,65 @@ class GameState: ObservableObject {
                 guard add(col, row) else { break }
                 col += dc; row += dr
             }
+        }
+
+        return (moves, attacks)
+    }
+
+    // King: 1 step in any of 8 directions.
+    private func kingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        var moves = Set<Position>(), attacks = Set<Position>()
+        for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)] {
+            let col = p.pos.col + dc, row = p.pos.row + dr
+            guard Position.valid(col: col, row: row) else { continue }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+            } else {
+                moves.insert(pos)
+            }
+        }
+        return (moves, attacks)
+    }
+
+    // Dwarf: slides orthogonally up to 2, slides diagonally up to 2, plus knight-shape squares
+    // (no jumping — a knight move is blocked if the square in the longer axis is occupied).
+    private func dwarfDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+        let c = p.pos.col, r = p.pos.row
+        var moves = Set<Position>(), attacks = Set<Position>()
+
+        func add(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            let pos = Position(col: col, row: row)
+            if let hit = piece(at: pos) {
+                if hit.side != p.side { attacks.insert(pos) }
+                return false
+            }
+            moves.insert(pos)
+            return true
+        }
+
+        func occupied(_ col: Int, _ row: Int) -> Bool {
+            guard Position.valid(col: col, row: row) else { return false }
+            return piece(at: Position(col: col, row: row)) != nil
+        }
+
+        // Orthogonal slide up to 2.
+        for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] {
+            for step in 1...2 { guard add(c + dc*step, r + dr*step) else { break } }
+        }
+
+        // Diagonal slide up to 2.
+        for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
+            for step in 1...2 { guard add(c + dc*step, r + dr*step) else { break } }
+        }
+
+        // Knight-shape moves — no jumping: blocked by a piece in the longer-axis direction.
+        for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
+            let transitCol = c + (abs(dc) > abs(dr) ? dc/2 : 0)
+            let transitRow = r + (abs(dr) > abs(dc) ? dr/2 : 0)
+            if occupied(transitCol, transitRow) { continue }
+            _ = add(c + dc, r + dr)
         }
 
         return (moves, attacks)

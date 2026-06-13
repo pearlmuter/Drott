@@ -250,9 +250,10 @@ class GameState: ObservableObject {
         return (moves, attacks)
     }
 
-    // Spearman: spear-tip forward 1, fans to diagonals at 2, spreads at 3. Plus 1 backward.
-    // Each range depends on the previous transit being empty.
-    // (0,+3) is reachable via either diagonal lane at range 2.
+    // Spearman: 3-wide at range 1 (diagonals + straight), spreading wider at range 2.
+    // Legal moves relative to piece: (-1,+1),(0,+1),(+1,+1) then (-2,+2),(0,+2),(+2,+2).
+    // Each range-2 square requires its range-1 lane to be clear.
+    // Diagonals at range 1 respect shieldwall. Plus 1 step backward.
     private func spearmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
@@ -274,20 +275,27 @@ class GameState: ObservableObject {
             return piece(at: Position(col: col, row: row)) != nil
         }
 
-        // Range 1: straight forward only — the spear tip.
-        _ = add(c, r + fwd)
+        // Range 1: straight forward.
+        let centerClear = add(c, r + fwd)
 
-        // Range 2+: requires the tip square to be empty.
-        if !occupied(c, r + fwd) {
-            // Range 2: diagonals only (no center at range 2).
-            let leftClear  = add(c - 1, r + 2 * fwd)
-            let rightClear = add(c + 1, r + 2 * fwd)
-
-            // Range 3: outer columns via their diagonal lane; center via either diagonal lane.
-            if leftClear  { _ = add(c - 2, r + 3 * fwd) }
-            if rightClear { _ = add(c + 2, r + 3 * fwd) }
-            if leftClear || rightClear { _ = add(c, r + 3 * fwd) }
+        // Range 1: diagonals — shieldwall blocks if both adjacent orthogonals occupied.
+        let leftClear: Bool
+        if occupied(c, r + fwd) && occupied(c - 1, r) {
+            leftClear = false
+        } else {
+            leftClear = add(c - 1, r + fwd)
         }
+        let rightClear: Bool
+        if occupied(c, r + fwd) && occupied(c + 1, r) {
+            rightClear = false
+        } else {
+            rightClear = add(c + 1, r + fwd)
+        }
+
+        // Range 2: each lane extends 1 column further out, requires range-1 lane to be empty.
+        if centerClear { _ = add(c,     r + 2 * fwd) }
+        if leftClear   { _ = add(c - 2, r + 2 * fwd) }
+        if rightClear  { _ = add(c + 2, r + 2 * fwd) }
 
         // 1 step directly backward.
         _ = add(c, r - fwd)

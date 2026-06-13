@@ -250,9 +250,9 @@ class GameState: ObservableObject {
         return (moves, attacks)
     }
 
-    // Spearman: expanding fan forward — diagonals at 1, 3-wide at 2, spread at 3 — plus 1 backward.
-    // Diagonal lanes slide (blocked by occupants); center lane requires (0,+1) transit to be empty.
-    // Outer range-3 squares (±2) route through the inner diagonal lane.
+    // Spearman: spear-tip forward 1, fans to diagonals at 2, spreads at 3. Plus 1 backward.
+    // Each range depends on the previous transit being empty.
+    // (0,+3) is reachable via either diagonal lane at range 2.
     private func spearmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
@@ -274,23 +274,19 @@ class GameState: ObservableObject {
             return piece(at: Position(col: col, row: row)) != nil
         }
 
-        // Diagonal lanes (±1 col): shieldwall at entry, then slide up to range 2,
-        // and if clear at range 2 the outer column at range 3 opens.
-        for dc in [-1, 1] {
-            if occupied(c, r + fwd) && occupied(c + dc, r) { continue }
-            if add(c + dc, r + fwd) {
-                if add(c + dc, r + 2 * fwd) {
-                    _ = add(c + 2 * dc, r + 3 * fwd)
-                }
-            }
-        }
+        // Range 1: straight forward only — the spear tip.
+        _ = add(c, r + fwd)
 
-        // Center lane: range 2 and 3 (no range-1 destination — spear doesn't thrust straight 1).
-        // Blocked if the transit square at (c, r+fwd) is occupied.
+        // Range 2+: requires the tip square to be empty.
         if !occupied(c, r + fwd) {
-            if add(c, r + 2 * fwd) {
-                _ = add(c, r + 3 * fwd)
-            }
+            // Range 2: diagonals only (no center at range 2).
+            let leftClear  = add(c - 1, r + 2 * fwd)
+            let rightClear = add(c + 1, r + 2 * fwd)
+
+            // Range 3: outer columns via their diagonal lane; center via either diagonal lane.
+            if leftClear  { _ = add(c - 2, r + 3 * fwd) }
+            if rightClear { _ = add(c + 2, r + 3 * fwd) }
+            if leftClear || rightClear { _ = add(c, r + 3 * fwd) }
         }
 
         // 1 step directly backward.

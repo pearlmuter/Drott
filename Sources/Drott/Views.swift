@@ -7,6 +7,7 @@ private let SQ: CGFloat = 54
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
+        SelfTest.runIfRequested()   // exits the process when DROTT_SELFTEST=1
         NSApp.setActivationPolicy(.regular)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -54,6 +55,26 @@ struct ContentView: View {
 
 private enum SideTab { case game, rules }
 
+/// Maps the opponent segmented control to `GameState.aiSide`.
+private enum OpponentChoice: Hashable {
+    case human, cpuBlack, cpuRed
+
+    init(aiSide: Side?) {
+        switch aiSide {
+        case .red:   self = .cpuRed
+        case .black: self = .cpuBlack
+        case nil:    self = .human
+        }
+    }
+    var aiSide: Side? {
+        switch self {
+        case .human:    return nil
+        case .cpuBlack: return .black
+        case .cpuRed:   return .red
+        }
+    }
+}
+
 struct SidePanel: View {
     @ObservedObject var game: GameState
     @State private var tab: SideTab = .game
@@ -71,6 +92,42 @@ struct SidePanel: View {
                     VStack(alignment: .leading, spacing: 1) {
                         fieldLabel(game.winner != nil ? "WINNER" : "TURN")
                         Text(side.rawValue).font(.title3.weight(.semibold))
+                    }
+                    Spacer()
+                    if game.thinking {
+                        HStack(spacing: 5) {
+                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                            Text("thinking…").font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            // Opponent
+            infoCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    fieldLabel("COMPUTER PLAYS")
+                    Picker("", selection: Binding(
+                        get: { OpponentChoice(aiSide: game.aiSide) },
+                        set: { game.setAI($0.aiSide) }
+                    )) {
+                        Text("Off").tag(OpponentChoice.human)
+                        Text("Black").tag(OpponentChoice.cpuBlack)
+                        Text("Red").tag(OpponentChoice.cpuRed)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if game.aiSide != nil {
+                        fieldLabel("STRENGTH")
+                        Picker("", selection: Binding(
+                            get: { game.thinkTime },
+                            set: { game.thinkTime = $0 }
+                        )) {
+                            Text("Fast").tag(0.4)
+                            Text("Normal").tag(1.2)
+                            Text("Strong").tag(2.5)
+                        }
+                        .pickerStyle(.segmented)
                     }
                 }
             }

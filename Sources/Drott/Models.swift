@@ -250,10 +250,8 @@ class GameState: ObservableObject {
         return (moves, attacks)
     }
 
-    // Spearman: 3-wide at range 1 (diagonals + straight), spreading wider at range 2.
-    // Legal moves relative to piece: (-1,+1),(0,+1),(+1,+1) then (-2,+2),(0,+2),(+2,+2).
-    // Each range-2 square requires its range-1 lane to be clear.
-    // Diagonals at range 1 respect shieldwall. Plus 1 step backward.
+    // Spearman: slides straight forward up to 4, plus 1 step sideways each direction.
+    // No diagonals, no backward movement.
     private func spearmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
@@ -270,35 +268,11 @@ class GameState: ObservableObject {
             return true
         }
 
-        func occupied(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row)) != nil
-        }
+        // Forward: slide up to 4 steps.
+        for step in 1...4 { guard add(c, r + step * fwd) else { break } }
 
-        // Range 1: straight forward.
-        let centerClear = add(c, r + fwd)
-
-        // Range 1: diagonals — shieldwall blocks if both adjacent orthogonals occupied.
-        let leftClear: Bool
-        if occupied(c, r + fwd) && occupied(c - 1, r) {
-            leftClear = false
-        } else {
-            leftClear = add(c - 1, r + fwd)
-        }
-        let rightClear: Bool
-        if occupied(c, r + fwd) && occupied(c + 1, r) {
-            rightClear = false
-        } else {
-            rightClear = add(c + 1, r + fwd)
-        }
-
-        // Range 2: each lane extends 1 column further out, requires range-1 lane to be empty.
-        if centerClear { _ = add(c,     r + 2 * fwd) }
-        if leftClear   { _ = add(c - 2, r + 2 * fwd) }
-        if rightClear  { _ = add(c + 2, r + 2 * fwd) }
-
-        // 1 step directly backward.
-        _ = add(c, r - fwd)
+        // Sideways: 1 step each direction.
+        for dc in [-1, 1] { _ = add(c + dc, r) }
 
         return (moves, attacks)
     }

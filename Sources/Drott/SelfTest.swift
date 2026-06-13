@@ -39,11 +39,13 @@ enum SelfTest {
         print("=== Drott self-test ===")
 
         startPosition()
+        edgeProbing()
         kingCaptureTerminal()
         kingCaptureTactic()
         fortControl()
         castleHold()
         engineSanity()
+        selfPlayStress()
 
         print(failures == 0 ? "ALL PASSED" : "\(failures) FAILURE(S)")
         exit(failures == 0 ? 0 : 1)
@@ -59,6 +61,34 @@ enum SelfTest {
         let black = b.legalMoves()
         check(red.count == black.count, "opening is symmetric (red \(red.count) == black \(black.count))")
         check(b.winner == nil, "opening is not terminal")
+    }
+
+    // Generating moves for every piece type on every square must never read
+    // off-board (regression for the array-indexed piece(at:) crash). The rules
+    // probe neighbouring squares without bounds-checking, so edges and corners
+    // — where a forward/knight probe lands outside the board — are the risk.
+    private static func edgeProbing() {
+        print("[edge probing]")
+        var combos = 0
+        for type in PieceType.allCases {
+            for side in Side.allCases {
+                for row in 0..<Board.N {
+                    for col in 0..<Board.N {
+                        var b = Board.empty()
+                        b.put(.king, .red, Position(col: 0, row: 0))
+                        b.put(.king, .black, Position(col: 10, row: 10))
+                        b.put(type, side, Position(col: col, row: row))
+                        b.sideToMove = side
+                        _ = b.legalMoves()    // would trap on an off-board probe
+                        _ = b.captureMoves()
+                        combos += 1
+                    }
+                }
+            }
+        }
+        // Reaching here means no out-of-bounds access occurred.
+        check(combos == PieceType.allCases.count * 2 * Board.N * Board.N,
+              "move-gen safe for every piece on every square (\(combos) combos)")
     }
 
     // Capturing the enemy king ends the game for the mover.
@@ -140,5 +170,22 @@ enum SelfTest {
             check(legal, "engine's move is legal (\(mv.from)-\(mv.to))")
         }
         check(elapsed < 3.0, "search respected the time budget (\(String(format: "%.2f", elapsed))s)")
+    }
+
+    // Play a full computer-vs-computer game to completion. Reproduces the real
+    // self-play scenario that crashed (engine searching evolving positions with
+    // pieces pushed to the board edges).
+    private static func selfPlayStress() {
+        print("[self-play stress]")
+        var b = Board()
+        var moves = 0
+        let cap = 150
+        while b.winner == nil && moves < cap {
+            guard let mv = Engine.bestMove(for: b, timeLimit: 0.03) else { break }
+            b = b.applying(mv)
+            moves += 1
+        }
+        let outcome = b.winner.map { $0.rawValue } ?? "no result (move cap)"
+        check(moves > 0, "self-play ran \(moves) moves without crashing — \(outcome)")
     }
 }

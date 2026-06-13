@@ -140,7 +140,13 @@ struct Board {
     @inline(__always) func index(_ col: Int, _ row: Int) -> Int { col + row * Board.N }
     @inline(__always) func index(_ p: Position) -> Int { p.col + p.row * Board.N }
 
-    func piece(at pos: Position) -> Piece? { squares[index(pos)] }
+    /// Returns nil for off-board positions. The movement rules rely on this:
+    /// they probe neighbouring squares (e.g. one rank ahead) without bounds
+    /// checking first, so an off-board probe must be a safe miss, not a trap.
+    func piece(at pos: Position) -> Piece? {
+        guard Position.valid(col: pos.col, row: pos.row) else { return nil }
+        return squares[index(pos)]
+    }
 
     var pieces: [Piece] { squares.compactMap { $0 } }
 

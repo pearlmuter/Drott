@@ -11,12 +11,11 @@ struct Position: Equatable, Hashable, CustomStringConvertible {
     var rowLabel: Int    { row + 1 }
     var description: String { "\(colLabel)\(rowLabel)" }
 
-    // Centre of the board
     static let castle = Position(col: 5, row: 5)  // F6
 
-    // Fort: the 2-row × 5-col starting area at each end
-    static func isRedFort(_ p: Position)   -> Bool { (3...7).contains(p.col) && p.row <= 1  }
-    static func isBlackFort(_ p: Position) -> Bool { (3...7).contains(p.col) && p.row >= 9  }
+    // Fort: the 2-rank starting area at each end (cols C–I, ranks 1–2 / 10–11)
+    static func isRedFort(_ p: Position)   -> Bool { (2...8).contains(p.col) && p.row <= 1  }
+    static func isBlackFort(_ p: Position) -> Bool { (2...8).contains(p.col) && p.row >= 9  }
     static func isFort(_ p: Position)      -> Bool { isRedFort(p) || isBlackFort(p) }
 
     static func valid(col: Int, row: Int) -> Bool {
@@ -69,20 +68,24 @@ struct LogEntry: Identifiable {
 // MARK: - Game State
 
 class GameState: ObservableObject {
-    @Published var pieces: [Piece]    = []
-    @Published var selected: Position? = nil
-    @Published var turn: Side          = .red
-    @Published var log: [LogEntry]     = []
+    @Published var pieces: [Piece]          = []
+    @Published var selected: Position?      = nil
+    @Published var turn: Side               = .red
+    @Published var log: [LogEntry]          = []
+    @Published var highlightMoves: Set<Position>   = []
+    @Published var highlightAttacks: Set<Position> = []
 
     init() { reset() }
 
     // MARK: Public API
 
     func reset() {
-        pieces   = []
-        selected = nil
-        turn     = .red
-        log      = []
+        pieces         = []
+        selected       = nil
+        turn           = .red
+        log            = []
+        highlightMoves = []
+        highlightAttacks = []
         buildStart()
         addLog("Game started — Red's turn.")
     }
@@ -93,13 +96,14 @@ class GameState: ObservableObject {
             if sel == pos {
                 selected = nil
             } else if let t = tapped, t.side == turn {
-                selected = pos          // reselect another friendly piece
+                selected = pos
             } else {
                 move(from: sel, to: pos)
             }
         } else if let t = tapped, t.side == turn {
             selected = pos
         }
+        updateHighlights()
     }
 
     func piece(at pos: Position) -> Piece? {
@@ -113,19 +117,16 @@ class GameState: ObservableObject {
             selected = nil; return
         }
         let mover = pieces[fi]
-        // Can't land on own piece
         if let blocker = piece(at: to), blocker.side == mover.side {
             selected = nil; return
         }
 
         var entry = "\(mover.side.rawValue) \(mover.type.fullName)  \(from) → \(to)"
 
-        // Capture
         if let ci = pieces.firstIndex(where: { $0.pos == to }) {
             entry += "  ×\(pieces[ci].type.fullName)"
             pieces.remove(at: ci)
         }
-        // Move (re-find after possible removal)
         if let ni = pieces.firstIndex(where: { $0.pos == from }) {
             pieces[ni].pos = to
         }
@@ -136,6 +137,35 @@ class GameState: ObservableObject {
         addLog("\(turn.rawValue)'s turn.")
     }
 
+    // Straight-line reachability (all 8 directions, blocked by any piece).
+    // Per-piece movement ranges are not yet enforced — to be added.
+    private func updateHighlights() {
+        guard let sel = selected, let p = piece(at: sel) else {
+            highlightMoves   = []
+            highlightAttacks = []
+            return
+        }
+        var moves   = Set<Position>()
+        var attacks = Set<Position>()
+
+        let dirs = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
+        for (dc, dr) in dirs {
+            var c = p.pos.col + dc
+            var r = p.pos.row + dr
+            while Position.valid(col: c, row: r) {
+                let pos = Position(col: c, row: r)
+                if let blocker = piece(at: pos) {
+                    if blocker.side != p.side { attacks.insert(pos) }
+                    break
+                }
+                moves.insert(pos)
+                c += dc; r += dr
+            }
+        }
+        highlightMoves   = moves
+        highlightAttacks = attacks
+    }
+
     private func addLog(_ text: String) {
         log.append(LogEntry(text: text))
         if log.count > 200 { log.removeFirst() }
@@ -144,41 +174,55 @@ class GameState: ObservableObject {
     // MARK: Starting position
     //
     // Red (bottom):
-    //   Row 1 (row=0): Berserker E1, Spearman F1, Bowman G1
-    //   Row 2 (row=1): Wolf D2, Elf E2, King F2, Dwarf G2, Hunter H2
-    //   Row 3 (row=2): Skjoldings B3–J3
+    //   Rank 1 (row=0): V C1 · Wo D1 · El E1 · K F1 · Bk G1 · Hu H1 · V I1
+    //   Rank 2 (row=1): V D2 · Bw E2 · Sp F2 · Dw G2 · V H2
+    //   Rank 3 (row=2): V E3 · V F3 · V G3
     //
-    // Black (top), mirrored vertically.
+    // Black (top) is the vertical mirror.
 
     private func place(_ type: PieceType, _ side: Side, col: Int, row: Int) {
         pieces.append(Piece(type: type, side: side, pos: Position(col: col, row: row)))
     }
 
     private func buildStart() {
-        // Red
-        place(.berserker, .red, col: 4, row: 0)
-        place(.spearman,  .red, col: 5, row: 0)
-        place(.bowman,    .red, col: 6, row: 0)
+        // ── Red ───────────────────────────────────────────────────────────
+        // Rank 1
+        place(.skjolding, .red, col: 2, row: 0)   // C1
+        place(.wolf,      .red, col: 3, row: 0)   // D1
+        place(.elf,       .red, col: 4, row: 0)   // E1
+        place(.king,      .red, col: 5, row: 0)   // F1
+        place(.berserker, .red, col: 6, row: 0)   // G1
+        place(.hunter,    .red, col: 7, row: 0)   // H1
+        place(.skjolding, .red, col: 8, row: 0)   // I1
+        // Rank 2
+        place(.skjolding, .red, col: 3, row: 1)   // D2
+        place(.bowman,    .red, col: 4, row: 1)   // E2
+        place(.spearman,  .red, col: 5, row: 1)   // F2
+        place(.dwarf,     .red, col: 6, row: 1)   // G2
+        place(.skjolding, .red, col: 7, row: 1)   // H2
+        // Rank 3
+        place(.skjolding, .red, col: 4, row: 2)   // E3
+        place(.skjolding, .red, col: 5, row: 2)   // F3
+        place(.skjolding, .red, col: 6, row: 2)   // G3
 
-        place(.wolf,    .red, col: 3, row: 1)
-        place(.elf,     .red, col: 4, row: 1)
-        place(.king,    .red, col: 5, row: 1)
-        place(.dwarf,   .red, col: 6, row: 1)
-        place(.hunter,  .red, col: 7, row: 1)
-
-        for c in 1...9 { place(.skjolding, .red,   col: c, row: 2) }
-
-        // Black (mirrored)
-        place(.berserker, .black, col: 4, row: 10)
-        place(.spearman,  .black, col: 5, row: 10)
-        place(.bowman,    .black, col: 6, row: 10)
-
-        place(.wolf,    .black, col: 3, row: 9)
-        place(.elf,     .black, col: 4, row: 9)
-        place(.king,    .black, col: 5, row: 9)
-        place(.dwarf,   .black, col: 6, row: 9)
-        place(.hunter,  .black, col: 7, row: 9)
-
-        for c in 1...9 { place(.skjolding, .black, col: c, row: 8) }
+        // ── Black (mirrored) ──────────────────────────────────────────────
+        // Rank 11
+        place(.skjolding, .black, col: 2, row: 10)  // C11
+        place(.wolf,      .black, col: 3, row: 10)  // D11
+        place(.elf,       .black, col: 4, row: 10)  // E11
+        place(.king,      .black, col: 5, row: 10)  // F11
+        place(.berserker, .black, col: 6, row: 10)  // G11
+        place(.hunter,    .black, col: 7, row: 10)  // H11
+        place(.skjolding, .black, col: 8, row: 10)  // I11
+        // Rank 10
+        place(.skjolding, .black, col: 3, row: 9)   // D10
+        place(.bowman,    .black, col: 4, row: 9)   // E10
+        place(.spearman,  .black, col: 5, row: 9)   // F10
+        place(.dwarf,     .black, col: 6, row: 9)   // G10
+        place(.skjolding, .black, col: 7, row: 9)   // H10
+        // Rank 9
+        place(.skjolding, .black, col: 4, row: 8)   // E9
+        place(.skjolding, .black, col: 5, row: 8)   // F9
+        place(.skjolding, .black, col: 6, row: 8)   // G9
     }
 }

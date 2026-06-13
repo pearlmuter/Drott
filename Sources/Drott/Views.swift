@@ -1,6 +1,6 @@
 import SwiftUI
 
-private let SQ: CGFloat = 54  // square size in points
+private let SQ: CGFloat = 54
 
 // MARK: - App entry
 
@@ -25,7 +25,7 @@ struct ContentView: View {
                 .padding(16)
             Divider()
             SidePanel(game: game)
-                .frame(width: 210)
+                .frame(width: 220)
                 .padding(16)
         }
         .background(Color(NSColor.windowBackgroundColor))
@@ -34,13 +34,16 @@ struct ContentView: View {
 
 // MARK: - Side panel
 
+private enum SideTab { case game, rules }
+
 struct SidePanel: View {
     @ObservedObject var game: GameState
+    @State private var tab: SideTab = .game
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
 
-            // Turn indicator
+            // Turn
             infoCard {
                 HStack(spacing: 8) {
                     Circle()
@@ -48,8 +51,7 @@ struct SidePanel: View {
                         .frame(width: 13, height: 13)
                     VStack(alignment: .leading, spacing: 1) {
                         fieldLabel("TURN")
-                        Text(game.turn.rawValue)
-                            .font(.title3.weight(.semibold))
+                        Text(game.turn.rawValue).font(.title3.weight(.semibold))
                     }
                 }
             }
@@ -59,16 +61,39 @@ struct SidePanel: View {
                 infoCard {
                     VStack(alignment: .leading, spacing: 3) {
                         fieldLabel("SELECTED")
-                        Text(p.type.fullName)
-                            .font(.system(size: 13, weight: .semibold))
+                        Text(p.type.fullName).font(.system(size: 13, weight: .semibold))
                         Text("\(p.side.rawValue)  ·  \(sel.description)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
             }
 
-            // Piece legend
+            // Tab picker
+            Picker("", selection: $tab) {
+                Text("Game").tag(SideTab.game)
+                Text("Rules").tag(SideTab.rules)
+            }
+            .pickerStyle(.segmented)
+
+            if tab == .game {
+                gameTab
+            } else {
+                rulesTab
+            }
+
+            Spacer()
+
+            Button("New Game") { game.reset() }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    // MARK: Game tab
+
+    private var gameTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Legend
             infoCard {
                 VStack(alignment: .leading, spacing: 3) {
                     fieldLabel("PIECES")
@@ -77,19 +102,15 @@ struct SidePanel: View {
                             Text(pt.symbol)
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .frame(width: 22, alignment: .leading)
-                            Text(pt.fullName)
-                                .font(.system(size: 11))
+                            Text(pt.fullName).font(.system(size: 11))
                         }
                     }
-                }
-            }
-
-            // Board key
-            infoCard {
-                VStack(alignment: .leading, spacing: 3) {
+                    Divider().padding(.vertical, 2)
                     fieldLabel("BOARD")
                     legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85), label: "Castle (F6)")
                     legendRow(color: Color(red: 0.55, green: 0.72, blue: 0.95).opacity(0.55), label: "Fort area")
+                    legendRow(color: .green.opacity(0.45), label: "Valid move")
+                    legendRow(color: .orange.opacity(0.75), label: "Can attack")
                 }
             }
 
@@ -107,24 +128,90 @@ struct SidePanel: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 130)
+                    .frame(maxHeight: 120)
                 }
             }
+        }
+    }
 
-            Spacer()
+    // MARK: Rules tab
 
-            Button("New Game") { game.reset() }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
+    private var rulesTab: some View {
+        infoCard {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+
+                    rulesSection("HOW TO WIN") {
+                        """
+                        1. Capture the opponent's King.
+                        2. Move any piece into the opponent's Fort (blue area) and survive until your next turn.
+                        3. March your King into the Castle (F6) and survive until your next turn. Checking a King already in the Castle won't help — he wins on his next turn regardless.
+                        """
+                    }
+
+                    rulesSection("MOVEMENT") {
+                        """
+                        • All pieces move in a straight line to their destination.
+                        • No piece may jump over another.
+                        • Shieldwall: two pieces standing adjacent to each other (orthogonally or diagonally) block anything from sliding between them.
+                        • Capture by landing on the enemy's square. The captured piece is removed.
+                        """
+                    }
+
+                    rulesSection("SKJOLDING  (V)") {
+                        """
+                        The most numerous piece. Moves forward toward the opponent. The square directly in front is open — Skjoldings cannot attack straight ahead. Placed diagonally they protect each other. Build chains for a strong line.
+                        """
+                    }
+
+                    rulesSection("OFFICERS") {
+                        """
+                        K   King — must be protected. Can enter the Castle to win.
+                        Sp  Spearman — limited retreat.
+                        Bw  Bowman — long range; limited retreat. Good for covering the Castle from afar.
+                        Bk  Berserker — wide field of action; good at chasing the King. Limited retreat. Best used to support Skjolding advances early.
+                        El  Elf — dynamic; pairs with Wolf. Works well on the flanks.
+                        Wo  Wolf — dynamic; pairs with Elf.
+                        Dw  Dwarf — pairs with Hunter.
+                        Hu  Hunter — pairs with Dwarf.
+                        """
+                    }
+
+                    rulesSection("STRATEGY NOTES") {
+                        """
+                        • Control the centre to limit the opponent's King from approaching the Castle easily.
+                        • Develop officers early so flanks aren't open.
+                        • Double-advance: officers work best in tandem (Wolf+Elf, Hunter+Dwarf).
+                        • King advance can be a winning threat — but leaves your own Fort exposed.
+                        • Material advantage? Attack both flanks at once — one must give.
+                        """
+                    }
+
+                    rulesSection("NOTE") {
+                        "Movement ranges per piece are not yet enforced in this app — any straight-line move is currently permitted. To be added."
+                    }
+                }
+                .padding(.bottom, 4)
+            }
+            .frame(maxHeight: 460)
         }
     }
 
     // MARK: Helpers
 
+    private func rulesSection(_ title: String, _ body: () -> String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(body())
+                .font(.system(size: 10.5))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func fieldLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
+        Text(text).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
     }
 
     private func legendRow(color: Color, label: String) -> some View {
@@ -153,7 +240,7 @@ struct BoardView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Row labels  11 … 1  (top to bottom on screen)
+            // Row labels  11 … 1
             VStack(spacing: 0) {
                 ForEach((0..<11).reversed(), id: \.self) { row in
                     Text("\(row + 1)")
@@ -161,11 +248,10 @@ struct BoardView: View {
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-                Color.clear.frame(width: 26, height: 26)  // padding under board for col labels
+                Color.clear.frame(width: 26, height: 26)
             }
 
             VStack(spacing: 0) {
-                // Grid
                 VStack(spacing: 0) {
                     ForEach((0..<11).reversed(), id: \.self) { row in
                         HStack(spacing: 0) {
@@ -174,7 +260,9 @@ struct BoardView: View {
                                 SquareView(
                                     pos: pos,
                                     piece: game.piece(at: pos),
-                                    isSelected: game.selected == pos
+                                    isSelected:    game.selected == pos,
+                                    isMoveTarget:  game.highlightMoves.contains(pos),
+                                    isAttackTarget: game.highlightAttacks.contains(pos)
                                 )
                                 .onTapGesture { game.tap(pos) }
                             }
@@ -203,6 +291,8 @@ struct SquareView: View {
     let pos: Position
     let piece: Piece?
     let isSelected: Bool
+    let isMoveTarget: Bool
+    let isAttackTarget: Bool
 
     private var bg: Color {
         if isSelected           { return .green.opacity(0.55) }
@@ -218,20 +308,30 @@ struct SquareView: View {
         ZStack {
             Rectangle().fill(bg)
 
+            // Move target: green dot on empty squares
+            if isMoveTarget && piece == nil {
+                Circle()
+                    .fill(Color.green.opacity(0.55))
+                    .frame(width: SQ * 0.30, height: SQ * 0.30)
+            }
+
             if let p = piece {
                 PieceToken(piece: p)
-            } else {
-                // Subtle coordinate hint in empty squares
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
+            } else if !isMoveTarget {
+                VStack { Spacer()
+                    HStack { Spacer()
                         Text(pos.description)
                             .font(.system(size: 7))
                             .foregroundColor(.black.opacity(0.18))
                             .padding(2)
                     }
                 }
+            }
+
+            // Attack target: orange ring around the whole square
+            if isAttackTarget {
+                Rectangle()
+                    .stroke(Color.orange, lineWidth: 2.5)
             }
         }
         .frame(width: SQ, height: SQ)
@@ -248,20 +348,17 @@ struct PieceToken: View {
 
     private var fill: Color {
         switch (piece.side, piece.type == .king) {
-        case (.red,   true):  return Color(red: 0.80, green: 0.50, blue: 0.05)  // gold
-        case (.red,   false): return Color(red: 0.72, green: 0.08, blue: 0.08)  // crimson
-        case (.black, true):  return Color(red: 0.35, green: 0.35, blue: 0.44)  // steel
-        case (.black, false): return Color(red: 0.12, green: 0.12, blue: 0.18)  // dark
+        case (.red,   true):  return Color(red: 0.80, green: 0.50, blue: 0.05)
+        case (.red,   false): return Color(red: 0.72, green: 0.08, blue: 0.08)
+        case (.black, true):  return Color(red: 0.35, green: 0.35, blue: 0.44)
+        case (.black, false): return Color(red: 0.12, green: 0.12, blue: 0.18)
         }
     }
 
     var body: some View {
         ZStack {
-            Circle()
-                .fill(fill)
-                .frame(width: size, height: size)
-            Circle()
-                .stroke(Color.white.opacity(0.22), lineWidth: 1.5)
+            Circle().fill(fill).frame(width: size, height: size)
+            Circle().stroke(Color.white.opacity(0.22), lineWidth: 1.5)
                 .frame(width: size, height: size)
             Text(piece.type.symbol)
                 .font(.system(size: size * 0.27, weight: .bold, design: .rounded))

@@ -147,22 +147,6 @@ enum Engine {
     static let varietyProbability = 0.30
     static let varietyMargin = 30          // in eval units (~0.3 "pawns")
 
-    // Static piece ranks used ONLY for capture move-ordering (cheap, need not
-    // match the mobility evaluation). King highest so king-captures sort first.
-    private static func orderingValue(_ t: PieceType) -> Int {
-        switch t {
-        case .king:      return 10_000
-        case .skjolding: return 100
-        case .spearman:  return 240
-        case .hunter:    return 280
-        case .bowman:    return 290
-        case .dwarf:     return 300
-        case .wolf:      return 320
-        case .elf:       return 330
-        case .berserker: return 340
-        }
-    }
-
     // Scores at/above this magnitude are "mate" scores (win in N).
     static var mateThreshold: Int { mate - maxDepth - 1 }
     private static func isMateScore(_ s: Int) -> Bool { abs(s) > mateThreshold }
@@ -433,7 +417,10 @@ enum Engine {
         if let t = ttMove, mv == t { return 1_000_000_000 }
         if mv.isCapture, let victim = board.piece(at: mv.to) {
             if victim.type == .king { return 900_000_000 }
-            return 500_000_000 + orderingValue(victim.type)
+            // MVV-LVA: prefer taking the most valuable victim with the least
+            // valuable attacker, so winning captures are searched first.
+            let attacker = board.piece(at: mv.from)?.type ?? .skjolding
+            return 500_000_000 + baseValue(victim.type) * 16 - baseValue(attacker)
         }
         if let k = k0, mv == k { return 400_000_000 }
         if let k = k1, mv == k { return 399_000_000 }

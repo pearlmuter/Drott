@@ -41,8 +41,11 @@ struct ContentView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            BoardView(game: game)
-                .padding(16)
+            VStack(alignment: .leading, spacing: 12) {
+                BoardView(game: game)
+                GameGraphPanel(game: game)
+            }
+            .padding(16)
             Divider()
             SidePanel(game: game)
                 .frame(width: 220)
@@ -53,9 +56,54 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Game eval graph (under the board)
+
+struct GameGraphPanel: View {
+    @ObservedObject var game: GameState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("GAME EVALUATION")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if game.deepAnalyzing {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                        Text("Deeper analysis \(game.deepProgress)/\(game.deepTotal)…")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                        Button("Stop") { game.cancelAnalysis() }
+                            .controlSize(.small)
+                    }
+                } else {
+                    Text("\(GameGraphPanel.deepSeconds(game.deepTimePerMove))s/move · depth ≤\(GameState.analysisDepthCap)")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Button("Deeper analysis") { game.analyzeGame() }
+                        .controlSize(.small)
+                        .disabled(game.record.isEmpty)
+                }
+            }
+
+            EvalGraph(scores: game.graphScores, current: game.viewIndex) { ply in
+                game.jumpTo(ply: ply)
+            }
+            .frame(height: 96)
+
+            Text("Red above the midline, Black below · in-game eval, replaced by deeper analysis · click to jump")
+                .font(.system(size: 9)).foregroundStyle(.tertiary)
+        }
+        .frame(width: SQ * 11 + 30)   // match the board's width (bar + labels + grid)
+    }
+
+    private static func deepSeconds(_ t: Double) -> String {
+        t == t.rounded() ? String(Int(t)) : String(format: "%.1f", t)
+    }
+}
+
 // MARK: - Side panel
 
-private enum SideTab { case game, graph, rules }
+private enum SideTab { case game, rules }
 
 struct SidePanel: View {
     @ObservedObject var game: GameState
@@ -154,14 +202,12 @@ struct SidePanel: View {
             // Tab picker
             Picker("", selection: $tab) {
                 Text("Game").tag(SideTab.game)
-                Text("Graph").tag(SideTab.graph)
                 Text("Rules").tag(SideTab.rules)
             }
             .pickerStyle(.segmented)
 
             switch tab {
             case .game:  gameTab
-            case .graph: graphTab
             case .rules: rulesTab
             }
 
@@ -387,62 +433,6 @@ struct SidePanel: View {
         .cornerRadius(3)
         .contentShape(Rectangle())
         .onTapGesture { game.jumpTo(ply: idx + 1) }
-    }
-
-    // MARK: Graph tab (deep post-game analysis)
-
-    private var graphTab: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            infoCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    fieldLabel("GAME ANALYSIS")
-                    Text("Runs the engine over every move (deeper search, up to depth \(GameState.analysisDepthCap)) and charts the evaluation.")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    fieldLabel("TIME / MOVE")
-                    Picker("", selection: Binding(
-                        get: { game.deepTimePerMove },
-                        set: { game.deepTimePerMove = $0 }
-                    )) {
-                        Text("1s").tag(1.0)
-                        Text("2s").tag(2.0)
-                        Text("5s").tag(5.0)
-                    }
-                    .pickerStyle(.segmented)
-                    .disabled(game.deepAnalyzing)
-
-                    if game.deepAnalyzing {
-                        HStack(spacing: 8) {
-                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
-                            Text("Analysing \(game.deepProgress) / \(game.deepTotal)…")
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
-                        }
-                        Button("Stop") { game.cancelAnalysis() }
-                            .buttonStyle(.bordered)
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Button(game.record.isEmpty ? "No moves yet" : "Analyse game") {
-                            game.analyzeGame()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .frame(maxWidth: .infinity)
-                        .disabled(game.record.isEmpty)
-                    }
-                }
-            }
-
-            infoCard {
-                VStack(alignment: .leading, spacing: 6) {
-                    fieldLabel("EVALUATION")
-                    EvalGraph(scores: game.graphScores,
-                              current: game.viewIndex) { ply in game.jumpTo(ply: ply) }
-                        .frame(height: 150)
-                    Text("Red above the line, Black below · tap to jump")
-                        .font(.system(size: 9)).foregroundStyle(.tertiary)
-                }
-            }
-        }
     }
 
     // MARK: Rules tab

@@ -630,13 +630,15 @@ class GameState: ObservableObject {
     /// (a shallow eval swings wildly between transient threats).
     private let analysisTime = 1.2
 
-    // Deep post-game analysis: Red-perspective eval per ply (nil = not computed
-    // yet), for the evaluation graph. Runs the engine longer, capped at depth 22.
-    @Published var graphScores: [Int?] = []
+    // Evaluation graph: Red-perspective eval per ply (index aligned with
+    // `history`; nil = unknown). Populated live during the game with the engine's
+    // own contemporary evaluation, then optionally overwritten one position at a
+    // time by a deeper (5s, depth ≤22) re-analysis.
+    @Published var graphScores: [Int?] = [nil]
     @Published var deepAnalyzing = false
-    @Published var deepProgress = 0             // positions analysed so far
+    @Published var deepProgress = 0             // positions deep-analysed so far
     @Published var deepTotal = 0
-    @Published var deepTimePerMove: Double = 2.0
+    @Published var deepTimePerMove: Double = 5.0
     private var deepGen = 0
     private let deepQueue = DispatchQueue(label: "drott.deepanalysis", qos: .userInitiated)
     static let analysisDepthCap = 22
@@ -686,7 +688,8 @@ class GameState: ObservableObject {
         selected = nil
         highlightMoves = []
         highlightAttacks = []
-        clearGameGraph()
+        cancelDeepAnalysis()
+        graphScores = [nil]            // one slot for the opening position
         scheduleAnalysis()
         // Note: does not auto-start. Use startGame() to begin with the options.
     }
@@ -818,9 +821,11 @@ class GameState: ObservableObject {
 
     // MARK: Deep post-game analysis (the eval graph)
 
-    /// Run the engine over every position in the game (longer budget, depth ≤22)
-    /// and fill `graphScores` incrementally for the evaluation graph.
+    /// Re-analyse every position in the game with a deeper search (5s, depth ≤22)
+    /// and overwrite the graph one position at a time, replacing the contemporary
+    /// in-game evaluations as it goes.
     func analyzeGame() {
+        guard history.count > 1 else { return }
         deepGen += 1
         let gen = deepGen
         let boards = history
@@ -828,7 +833,8 @@ class GameState: ObservableObject {
         let drawAt = drawPly
         let budget = deepTimePerMove
 
-        graphScores = Array(repeating: nil, count: n)
+        // Keep the contemporary values on screen; they are replaced in place.
+        if graphScores.count != n { graphScores = Array(repeating: nil, count: n) }
         deepProgress = 0
         deepTotal = n
         deepAnalyzing = true
@@ -864,18 +870,14 @@ class GameState: ObservableObject {
         }
     }
 
-    func cancelAnalysis() {
-        deepGen += 1
-        deepAnalyzing = false
-    }
+    func cancelAnalysis() { cancelDeepAnalysis() }
 
-    /// Discard graph data (called when the game changes underneath it).
-    private func clearGameGraph() {
+    /// Stop any in-progress deep analysis (keeps the graph data already gathered).
+    private func cancelDeepAnalysis() {
         deepGen += 1
         deepAnalyzing = false
         deepProgress = 0
         deepTotal = 0
-        graphScores = []
     }
 
     // MARK: Mode
@@ -982,7 +984,10 @@ class GameState: ObservableObject {
 
     // MARK: Move execution
 
-    private func perform(_ move: Move) {
+    /// `contemporaryEval` is the engine's Red-perspective evaluation of the
+    /// position being moved from (passed by the AI; nil for human moves, where
+    /// the live eval is used instead) — recorded for the game eval graph.
+    private func perform(_ move: Move, contemporaryEval: Int? = nil) {
         let live = liveBoard
         guard let mover = live.piece(at: move.from) else { clearSelection(); return }
         if let blocker = live.piece(at: move.to), blocker.side == mover.side {
@@ -992,12 +997,21 @@ class GameState: ObservableObject {
         // Chess-style notation, computed before the board changes.
         let notation = live.notation(for: move)
 
+        // A new move supersedes any in-progress deep analysis, but the graph of
+        // already-recorded evaluations is kept and extended.
+        cancelDeepAnalysis()
+
+        let fromIndex = history.count - 1
         let wasAtLatest = atLatest
         let newBoard = live.applying(move)
         history.append(newBoard)
         record.append(MoveRecord(move: move, notation: notation, side: mover.side,
                                  reason: newBoard.winReason))
-        clearGameGraph()   // a new move invalidates any post-game graph
+
+        // Remember the engine's view of the position just played from, and add a
+        // slot for the new position (filled when it is moved from, or analysed).
+        graphScores[fromIndex] = contemporaryEval ?? evalRed
+        graphScores.append(nil)
 
         // Threefold repetition is a draw.
         if newBoard.winner == nil, GameState.isThreefoldRepetition(in: history) {
@@ -1010,6 +1024,12 @@ class GameState: ObservableObject {
 
         if isGameOver {
             isPlaying = false
+            // Terminal positions have a decisive eval.
+            if let w = newBoard.winner {
+                graphScores[history.count - 1] = (w == .red) ? Engine.mate : -Engine.mate
+            } else {
+                graphScores[history.count - 1] = 0   // draw
+            }
             return
         }
         maybeScheduleReply()
@@ -1051,12 +1071,15 @@ class GameState: ObservableObject {
             let chosen = Engine.pickMove(from: result)
             let elapsed = Date().timeIntervalSince(start)
             if elapsed < minStep { Thread.sleep(forTimeInterval: minStep - elapsed) }
+            // The engine's view of this position, from Red's perspective, for
+            // the game eval graph.
+            let redEval = snapshot.sideToMove == .red ? result.score : -result.score
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.thinking = false
                 // Drop a stale result (game reset or rewound during the search).
                 guard self.liveBoard == snapshot, !self.isGameOver else { return }
-                if let mv = chosen { self.perform(mv) }
+                if let mv = chosen { self.perform(mv, contemporaryEval: redEval) }
                 then?()
             }
         }

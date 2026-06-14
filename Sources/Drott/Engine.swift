@@ -47,6 +47,69 @@ final class Repetition {
     }
 }
 
+// MARK: - Transposition table + search state
+
+enum TTFlag { case exact, lower, upper }
+
+struct TTEntry {
+    var depth: Int
+    var score: Int
+    var flag: TTFlag
+    var bestMove: Move?
+}
+
+/// Per-search mutable state: transposition table, killer moves, history
+/// heuristic, repetition tracker, and the deadline. One per `Engine.search`.
+final class SearchContext {
+    let deadline: Date
+    let rep: Repetition
+    var tt: [UInt64: TTEntry] = [:]
+    private var killers: [Move?]                 // 2 slots per ply
+    private var history: [Int]                   // [fromIndex * 121 + toIndex]
+    private var deadlineCheck = 0
+
+    init(deadline: Date, rep: Repetition) {
+        self.deadline = deadline
+        self.rep = rep
+        killers = Array(repeating: nil, count: (Engine.maxDepth + 2) * 2)
+        history = Array(repeating: 0, count: 121 * 121)
+        tt.reserveCapacity(1 << 13)
+    }
+
+    /// Amortised deadline check. The mobility eval is heavy, so even ~100 nodes
+    /// can take a meaningful fraction of a short budget — check often enough that
+    /// a 0.03s self-play search doesn't overshoot into the hundreds of ms.
+    private var lastTimedOut = false
+    func timedOut() -> Bool {
+        if lastTimedOut { return true }                 // sticky once past deadline
+        deadlineCheck &+= 1
+        if deadlineCheck & 0x3F == 0, Date() >= deadline { lastTimedOut = true }
+        return lastTimedOut
+    }
+
+    func killer(_ ply: Int, _ slot: Int) -> Move? {
+        let i = ply * 2 + slot
+        return i < killers.count ? killers[i] : nil
+    }
+
+    @inline(__always) private func historyIndex(_ m: Move) -> Int {
+        (m.from.col + m.from.row * 11) * 121 + (m.to.col + m.to.row * 11)
+    }
+
+    func historyScore(_ m: Move) -> Int { history[historyIndex(m)] }
+
+    /// Record a beta cutoff: store quiet movers as killers and bump history.
+    func recordCutoff(_ m: Move, ply: Int, depth: Int) {
+        guard !m.isCapture else { return }
+        let base = ply * 2
+        if base + 1 < killers.count, killers[base] != m {
+            killers[base + 1] = killers[base]
+            killers[base] = m
+        }
+        history[historyIndex(m)] += depth * depth
+    }
+}
+
 enum Engine {
 
     // Large terminal score; kept well below Int.max so ±mate arithmetic is safe.
@@ -79,14 +142,15 @@ enum Engine {
         }
     }
 
+    // Scores at/above this magnitude are "mate" scores (win in N).
+    static var mateThreshold: Int { mate - maxDepth - 1 }
+    private static func isMateScore(_ s: Int) -> Bool { abs(s) > mateThreshold }
+
     // MARK: Public entry
 
-    /// Full multi-line search: returns the best and second-best root moves with
-    /// their exact scores, plus the depth reached, via iterative deepening.
-    ///
-    /// Root moves are searched with a full window (no sibling pruning) so every
-    /// root score is exact — that is what makes the second-best reliable and the
-    /// evaluation read-out meaningful. Pruning still applies one level down.
+    /// Full multi-line search: best and second-best root moves with their
+    /// scores, plus the depth reached, via iterative deepening + a transposition
+    /// table, killer/history move ordering, and principal-variation search.
     ///
     /// `history` is the sequence of real positions already played (ending at
     /// `board`); the engine uses it to score repetition draws correctly.
@@ -94,58 +158,34 @@ enum Engine {
     static func search(_ board: Board, history: [Board] = [],
                        timeLimit: TimeInterval,
                        depthLimit: Int = maxDepth) -> SearchResult {
-        let deadline = Date().addingTimeInterval(timeLimit)
-        let rep = Repetition(history)
-        var ordering = ordered(board.legalMoves(), on: board)
+        let ctx = SearchContext(deadline: Date().addingTimeInterval(timeLimit),
+                                rep: Repetition(history))
+        var ordering = orderMoves(board.legalMoves(), board: board, ctx: ctx, ply: 0, ttMove: nil)
 
         guard !ordering.isEmpty else {
             return SearchResult(best: nil, secondBest: nil,
-                                score: -(mate), secondScore: -(mate), depth: 0)
+                                score: -mate, secondScore: -mate, depth: 0)
         }
 
-        var result = SearchResult(best: ordering[0], secondBest: ordering.count > 1 ? ordering[1] : nil,
+        var result = SearchResult(best: ordering[0],
+                                  secondBest: ordering.count > 1 ? ordering[1] : nil,
                                   score: -infinity, secondScore: -infinity, depth: 0)
+
         var depth = 1
-
         while depth <= min(depthLimit, maxDepth) {
-            var scored: [(move: Move, score: Int)] = []
-            var completed = true
+            let iter = searchRoot(board, depth: depth, ordering: ordering, ctx: ctx)
+            guard iter.completed else { break }   // ran out of time mid-iteration
 
-            for mv in ordering {
-                if Date() >= deadline { completed = false; break }
-                let child = board.applying(mv)
-                let key = child.repetitionKey
-                let s: Int
-                if rep.enter(key) >= 3 {
-                    s = 0                                   // threefold → draw
-                } else {
-                    s = -negamax(child, depth: depth - 1, alpha: -infinity,
-                                 beta: infinity, ply: 1, deadline: deadline, rep: rep)
-                }
-                rep.leave(key)
-                scored.append((mv, s))
-            }
-
-            // Only adopt a depth that finished — a partial sweep is unreliable.
-            guard completed else { break }
-
-            scored.sort { $0.score > $1.score }
-            result.best = scored[0].move
-            result.score = scored[0].score
-            if scored.count > 1 {
-                result.secondBest = scored[1].move
-                result.secondScore = scored[1].score
-            } else {
-                result.secondBest = nil
-                result.secondScore = -infinity
-            }
+            result.best = iter.best
+            result.score = iter.bestScore
+            result.secondBest = iter.second
+            result.secondScore = iter.secondScore
             result.depth = depth
 
-            ordering = scored.map { $0.move }       // best-first next iteration
-            if result.score >= mate - maxDepth { break }   // forced win found
+            ordering = iter.ordering               // best-first next iteration
+            if isMateScore(iter.bestScore) && iter.bestScore > 0 { break }  // forced win
             depth += 1
         }
-
         return result
     }
 
@@ -161,53 +201,148 @@ enum Engine {
                          rng: () -> Double = { Double.random(in: 0..<1) }) -> Move? {
         guard let best = r.best else { return nil }
         guard let second = r.secondBest else { return best }
-        if r.score >= mate - maxDepth { return best }              // take the win
-        if r.secondScore <= -(mate - maxDepth) { return best }     // 2nd is a loss
+        if r.score >= mateThreshold { return best }            // take the win
+        if r.secondScore <= -mateThreshold { return best }     // 2nd is a loss
         if r.score - r.secondScore <= varietyMargin, rng() < varietyProbability {
             return second
         }
         return best
     }
 
-    // MARK: Negamax + alpha-beta
+    // MARK: Root (principal-variation search, multi-line)
 
-    private static func negamax(_ board: Board, depth: Int, alpha: Int, beta: Int,
-                                ply: Int, deadline: Date, rep: Repetition) -> Int {
+    private struct RootIteration {
+        var best: Move
+        var bestScore: Int
+        var second: Move?
+        var secondScore: Int
+        var ordering: [Move]
+        var completed: Bool
+    }
+
+    private static func searchRoot(_ board: Board, depth: Int,
+                                   ordering: [Move], ctx: SearchContext) -> RootIteration {
+        var alpha = -infinity
+        let beta = infinity
+        var scored: [(move: Move, score: Int)] = []
+        scored.reserveCapacity(ordering.count)
+        var best = ordering[0], bestScore = -infinity
+        var completed = true
+
+        for (i, mv) in ordering.enumerated() {
+            if ctx.timedOut() { completed = false; break }
+            let child = board.applying(mv)
+            let key = child.repetitionKey
+            let reps = ctx.rep.enter(key)
+            var score: Int
+            if reps >= 3 {
+                score = 0
+            } else if i == 0 {
+                score = -negamax(child, key: key, depth: depth - 1,
+                                 alpha: -beta, beta: -alpha, ply: 1, ctx: ctx)
+            } else {
+                score = -negamax(child, key: key, depth: depth - 1,
+                                 alpha: -alpha - 1, beta: -alpha, ply: 1, ctx: ctx)
+                if score > alpha {   // promising — re-search with a full window
+                    score = -negamax(child, key: key, depth: depth - 1,
+                                     alpha: -beta, beta: -alpha, ply: 1, ctx: ctx)
+                }
+            }
+            ctx.rep.leave(key)
+            scored.append((mv, score))
+            if score > bestScore { bestScore = score; best = mv }
+            if score > alpha { alpha = score }
+        }
+
+        // A partial iteration can still improve the move ordering, but its scores
+        // are unreliable, so the caller discards it for the reported result.
+        guard completed else {
+            return RootIteration(best: best, bestScore: bestScore, second: nil,
+                                 secondScore: -infinity, ordering: ordering, completed: false)
+        }
+
+        scored.sort { $0.score > $1.score }
+        return RootIteration(
+            best: scored[0].move, bestScore: scored[0].score,
+            second: scored.count > 1 ? scored[1].move : nil,
+            secondScore: scored.count > 1 ? scored[1].score : -infinity,
+            ordering: scored.map { $0.move }, completed: true)
+    }
+
+    // MARK: Negamax + alpha-beta + TT + PVS
+
+    private static func negamax(_ board: Board, key: UInt64, depth: Int,
+                                alpha: Int, beta: Int, ply: Int, ctx: SearchContext) -> Int {
         if let w = board.winner {
-            // `applying` always switches the side to move, so a terminal node's
-            // sideToMove is the player about to move into the decided result.
             let s = mate - ply
             return w == board.sideToMove ? s : -s
         }
+
+        var alpha = alpha
+        var beta = beta
+        let alphaOrig = alpha
+
+        // Transposition-table probe.
+        var ttMove: Move? = nil
+        if let e = ctx.tt[key] {
+            ttMove = e.bestMove
+            if e.depth >= depth {
+                switch e.flag {
+                case .exact: return e.score
+                case .lower: alpha = max(alpha, e.score)
+                case .upper: beta = min(beta, e.score)
+                }
+                if alpha >= beta { return e.score }
+            }
+        }
+
         if depth <= 0 {
             // Quiescence searches only captures (irreversible), so a repetition
             // can never form there — no rep tracking needed below this point.
-            return quiesce(board, alpha: alpha, beta: beta, ply: ply, deadline: deadline)
+            return quiesce(board, alpha: alpha, beta: beta, ply: ply, ctx: ctx)
         }
 
-        var alpha = alpha
-        let moves = ordered(board.legalMoves(), on: board)
-        if moves.isEmpty {
-            // No legal move: treat immobility as a loss for the side to move.
-            return -(mate - ply)
-        }
+        let moves = orderMoves(board.legalMoves(), board: board, ctx: ctx, ply: ply, ttMove: ttMove)
+        if moves.isEmpty { return -(mate - ply) }   // immobility = loss
 
         var best = -infinity
+        var bestMove: Move? = nil
+        var searchedFirst = false
+
         for mv in moves {
-            if Date() >= deadline { break }
+            if ctx.timedOut() { break }
             let child = board.applying(mv)
-            let key = child.repetitionKey
-            let score: Int
-            if rep.enter(key) >= 3 {
-                score = 0                                   // threefold → draw
+            let childKey = child.repetitionKey
+            let reps = ctx.rep.enter(childKey)
+            var score: Int
+            if reps >= 3 {
+                score = 0
+            } else if !searchedFirst {
+                score = -negamax(child, key: childKey, depth: depth - 1,
+                                 alpha: -beta, beta: -alpha, ply: ply + 1, ctx: ctx)
             } else {
-                score = -negamax(child, depth: depth - 1, alpha: -beta,
-                                 beta: -alpha, ply: ply + 1, deadline: deadline, rep: rep)
+                score = -negamax(child, key: childKey, depth: depth - 1,
+                                 alpha: -alpha - 1, beta: -alpha, ply: ply + 1, ctx: ctx)
+                if score > alpha && score < beta {
+                    score = -negamax(child, key: childKey, depth: depth - 1,
+                                     alpha: -beta, beta: -alpha, ply: ply + 1, ctx: ctx)
+                }
             }
-            rep.leave(key)
-            if score > best { best = score }
+            ctx.rep.leave(childKey)
+            searchedFirst = true
+
+            if score > best { best = score; bestMove = mv }
             if best > alpha { alpha = best }
-            if alpha >= beta { break }   // beta cutoff
+            if alpha >= beta {
+                ctx.recordCutoff(mv, ply: ply, depth: depth)   // killer + history
+                break
+            }
+        }
+
+        // Store in the transposition table (skip unstable mate scores).
+        if !ctx.timedOut() && !isMateScore(best) {
+            let flag: TTFlag = best <= alphaOrig ? .upper : (best >= beta ? .lower : .exact)
+            ctx.tt[key] = TTEntry(depth: depth, score: best, flag: flag, bestMove: bestMove)
         }
         return best
     }
@@ -219,7 +354,7 @@ enum Engine {
     // Critical here because capturing the king ends the game immediately.
 
     private static func quiesce(_ board: Board, alpha: Int, beta: Int,
-                                ply: Int, deadline: Date) -> Int {
+                                ply: Int, ctx: SearchContext) -> Int {
         if let w = board.winner {
             let s = mate - ply
             return w == board.sideToMove ? s : -s
@@ -228,14 +363,12 @@ enum Engine {
         let standPat = evaluate(board, for: board.sideToMove)
         if standPat >= beta { return beta }
         var alpha = max(alpha, standPat)
-
         if ply >= maxDepth { return alpha }
 
-        for mv in ordered(board.captureMoves(), on: board) {
-            if Date() >= deadline { break }
+        for mv in orderMoves(board.captureMoves(), board: board, ctx: ctx, ply: ply, ttMove: nil) {
+            if ctx.timedOut() { break }
             let child = board.applying(mv)
-            let score = -quiesce(child, alpha: -beta, beta: -alpha,
-                                 ply: ply + 1, deadline: deadline)
+            let score = -quiesce(child, alpha: -beta, beta: -alpha, ply: ply + 1, ctx: ctx)
             if score >= beta { return beta }
             if score > alpha { alpha = score }
         }
@@ -244,17 +377,30 @@ enum Engine {
 
     // MARK: Move ordering
     //
-    // Good ordering makes alpha-beta prune far more. Captures first, most
-    // valuable victim first (king highest of all), quiet moves after.
+    // Ordering quality drives pruning. Priority: TT move, then captures by victim
+    // value (MVV), then the two killer moves for this ply, then quiet moves by
+    // the history-heuristic score.
 
-    private static func ordered(_ moves: [Move], on board: Board) -> [Move] {
-        moves.sorted { orderingScore($0, on: board) > orderingScore($1, on: board) }
+    private static func orderMoves(_ moves: [Move], board: Board, ctx: SearchContext,
+                                   ply: Int, ttMove: Move?) -> [Move] {
+        let k0 = ctx.killer(ply, 0)
+        let k1 = ctx.killer(ply, 1)
+        return moves.sorted {
+            orderKey($0, board: board, ctx: ctx, ttMove: ttMove, k0: k0, k1: k1)
+                > orderKey($1, board: board, ctx: ctx, ttMove: ttMove, k0: k0, k1: k1)
+        }
     }
 
-    private static func orderingScore(_ mv: Move, on board: Board) -> Int {
-        guard mv.isCapture, let victim = board.piece(at: mv.to) else { return 0 }
-        if victim.type == .king { return 1_000_000 }
-        return 10_000 + orderingValue(victim.type)
+    private static func orderKey(_ mv: Move, board: Board, ctx: SearchContext,
+                                 ttMove: Move?, k0: Move?, k1: Move?) -> Int {
+        if let t = ttMove, mv == t { return 1_000_000_000 }
+        if mv.isCapture, let victim = board.piece(at: mv.to) {
+            if victim.type == .king { return 900_000_000 }
+            return 500_000_000 + orderingValue(victim.type)
+        }
+        if let k = k0, mv == k { return 400_000_000 }
+        if let k = k1, mv == k { return 399_000_000 }
+        return ctx.historyScore(mv)
     }
 
     // MARK: Evaluation
@@ -282,8 +428,7 @@ enum Engine {
             let sgn = p.side == me ? 1 : -1
 
             // Material = mobility (squares this piece can currently reach).
-            let (m, a) = board.validDestinations(for: p)
-            score += sgn * (m.count + a.count) * mobilityWeight
+            score += sgn * board.mobilityCount(for: p) * mobilityWeight
 
             // Skjolding advancement toward the enemy.
             if p.type == .skjolding {

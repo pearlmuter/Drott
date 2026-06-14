@@ -197,9 +197,9 @@ struct Board {
         result.reserveCapacity(64)
         for sq in squares {
             guard let p = sq, p.side == sideToMove else { continue }
-            let (m, a) = validDestinations(for: p)
-            for d in m { result.append(Move(from: p.pos, to: d, isCapture: false)) }
-            for d in a { result.append(Move(from: p.pos, to: d, isCapture: true)) }
+            generateMoves(for: p) { dest, isCapture in
+                result.append(Move(from: p.pos, to: dest, isCapture: isCapture))
+            }
         }
         return result
     }
@@ -208,8 +208,9 @@ struct Board {
         var result: [Move] = []
         for sq in squares {
             guard let p = sq, p.side == sideToMove else { continue }
-            let (_, a) = validDestinations(for: p)
-            for d in a { result.append(Move(from: p.pos, to: d, isCapture: true)) }
+            generateMoves(for: p) { dest, isCapture in
+                if isCapture { result.append(Move(from: p.pos, to: dest, isCapture: true)) }
+            }
         }
         return result
     }
@@ -291,67 +292,82 @@ struct Board {
     // MARK: Movement rules
 
     func validDestinations(for p: Piece) -> (Set<Position>, Set<Position>) {
-        switch p.type {
-        case .skjolding:  return skjoldingDests(for: p)
-        case .berserker:  return berserkerDests(for: p)
-        case .spearman:   return spearmanDests(for: p)
-        case .wolf:       return wolfDests(for: p)
-        case .elf:        return elfDests(for: p)
-        case .king:       return kingDests(for: p)
-        case .dwarf:      return dwarfDests(for: p)
-        case .hunter:     return hunterDests(for: p)
-        case .bowman:     return bowmanDests(for: p)
+        var moves = Set<Position>(), attacks = Set<Position>()
+        generateMoves(for: p) { pos, isCapture in
+            if isCapture { attacks.insert(pos) } else { moves.insert(pos) }
         }
+        return (moves, attacks)
+    }
+
+    /// Number of squares this piece can reach (moves + captures). The engine uses
+    /// this as its mobility-based material value — counting via the shared
+    /// generator avoids allocating the two Sets that `validDestinations` builds.
+    func mobilityCount(for p: Piece) -> Int {
+        var n = 0
+        generateMoves(for: p) { _, _ in n += 1 }
+        return n
+    }
+
+    /// Single source of truth for movement: calls `emit(destination, isCapture)`
+    /// for every legal destination of `p`. `validDestinations` and
+    /// `mobilityCount` are both thin wrappers over this.
+    func generateMoves(for p: Piece, emit: (Position, Bool) -> Void) {
+        switch p.type {
+        case .skjolding:  skjoldingMoves(p, emit)
+        case .berserker:  berserkerMoves(p, emit)
+        case .spearman:   spearmanMoves(p, emit)
+        case .wolf:       wolfMoves(p, emit)
+        case .elf:        elfMoves(p, emit)
+        case .king:       kingMoves(p, emit)
+        case .dwarf:      dwarfMoves(p, emit)
+        case .hunter:     hunterMoves(p, emit)
+        case .bowman:     bowmanMoves(p, emit)
+        }
+    }
+
+    @inline(__always)
+    private func occupied(_ col: Int, _ row: Int) -> Bool {
+        guard Position.valid(col: col, row: row) else { return false }
+        return squares[index(col, row)] != nil
     }
 
     // Skjolding: 2 forward (if 1-forward clear), diagonal forward ×2, 1 backward.
     // Shieldwall: diagonal blocked when both adjacent orthogonals occupied (any piece).
-    private func skjoldingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+    private func skjoldingMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
-        var moves = Set<Position>(), attacks = Set<Position>()
 
         func add(_ col: Int, _ row: Int) {
             guard Position.valid(col: col, row: row) else { return }
             let dest = Position(col: col, row: row)
             if let hit = piece(at: dest) {
-                if hit.side != p.side { attacks.insert(dest) }
+                if hit.side != p.side { emit(dest, true) }
             } else {
-                moves.insert(dest)
+                emit(dest, false)
             }
         }
-        func isOccupied(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row)) != nil
-        }
 
-        if piece(at: Position(col: c, row: r + fwd)) == nil { add(c, r + 2 * fwd) }
+        if !occupied(c, r + fwd) { add(c, r + 2 * fwd) }
         for dc in [-1, 1] {
-            if isOccupied(c, r + fwd) && isOccupied(c + dc, r) { continue }
+            if occupied(c, r + fwd) && occupied(c + dc, r) { continue }
             add(c + dc, r + fwd)
         }
         add(c, r - fwd)
-        return (moves, attacks)
     }
 
     // Berserker: 3 forward lanes ×3 steps each, 1 sideways. Shieldwall at lane entry.
-    private func berserkerDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+    private func berserkerMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
-        var moves = Set<Position>(), attacks = Set<Position>()
 
         func add(_ col: Int, _ row: Int) -> Bool {
             guard Position.valid(col: col, row: row) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
-                if hit.side != p.side { attacks.insert(pos) }
+                if hit.side != p.side { emit(pos, true) }
                 return false
             }
-            moves.insert(pos); return true
-        }
-        func occupied(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row)) != nil
+            emit(pos, false); return true
         }
 
         for step in 1...3 { guard add(c, r + step * fwd) else { break } }
@@ -360,27 +376,21 @@ struct Board {
             for step in 1...3 { guard add(c + dc, r + step * fwd) else { break } }
         }
         for dc in [-1, 1] { _ = add(c + dc, r) }
-        return (moves, attacks)
     }
 
     // Spearman: 3-wide at range 1 (shieldwall on diagonals), spread at range 2, 1 backward.
-    private func spearmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+    private func spearmanMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
-        var moves = Set<Position>(), attacks = Set<Position>()
 
         func add(_ col: Int, _ row: Int) -> Bool {
             guard Position.valid(col: col, row: row) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
-                if hit.side != p.side { attacks.insert(pos) }
+                if hit.side != p.side { emit(pos, true) }
                 return false
             }
-            moves.insert(pos); return true
-        }
-        func occupied(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row)) != nil
+            emit(pos, false); return true
         }
 
         let centerClear = add(c, r + fwd)
@@ -396,40 +406,35 @@ struct Board {
         if rightClear  { _ = add(c + 2, r + 2 * fwd) }
 
         _ = add(c, r - fwd)
-        return (moves, attacks)
     }
 
     // Wolf: slides orthogonally up to 3 steps in any direction.
-    private func wolfDests(for p: Piece) -> (Set<Position>, Set<Position>) {
-        var moves = Set<Position>(), attacks = Set<Position>()
+    private func wolfMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] {
             var col = p.pos.col + dc, row = p.pos.row + dr
             for _ in 1...3 {
                 guard Position.valid(col: col, row: row) else { break }
                 let pos = Position(col: col, row: row)
                 if let hit = piece(at: pos) {
-                    if hit.side != p.side { attacks.insert(pos) }
+                    if hit.side != p.side { emit(pos, true) }
                     break
                 }
-                moves.insert(pos)
+                emit(pos, false)
                 col += dc; row += dr
             }
         }
-        return (moves, attacks)
     }
 
     // Elf: 1 step orthogonally in any direction, plus diagonal slide up to 4 steps.
-    private func elfDests(for p: Piece) -> (Set<Position>, Set<Position>) {
-        var moves = Set<Position>(), attacks = Set<Position>()
-
+    private func elfMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         func add(_ col: Int, _ row: Int) -> Bool {
             guard Position.valid(col: col, row: row) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
-                if hit.side != p.side { attacks.insert(pos) }
+                if hit.side != p.side { emit(pos, true) }
                 return false
             }
-            moves.insert(pos); return true
+            emit(pos, false); return true
         }
 
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] { _ = add(p.pos.col + dc, p.pos.row + dr) }
@@ -437,39 +442,31 @@ struct Board {
             var col = p.pos.col + dc, row = p.pos.row + dr
             for _ in 1...4 { guard add(col, row) else { break }; col += dc; row += dr }
         }
-        return (moves, attacks)
     }
 
     // King: 1 step in any of 8 directions.
-    private func kingDests(for p: Piece) -> (Set<Position>, Set<Position>) {
-        var moves = Set<Position>(), attacks = Set<Position>()
+    private func kingMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)] {
             let col = p.pos.col + dc, row = p.pos.row + dr
             guard Position.valid(col: col, row: row) else { continue }
             let pos = Position(col: col, row: row)
-            if let hit = piece(at: pos) { if hit.side != p.side { attacks.insert(pos) } }
-            else { moves.insert(pos) }
+            if let hit = piece(at: pos) { if hit.side != p.side { emit(pos, true) } }
+            else { emit(pos, false) }
         }
-        return (moves, attacks)
     }
 
     // Dwarf: orthogonal slide ≤2, diagonal step 2 only (transit clear), knight-shape (no jump).
-    private func dwarfDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+    private func dwarfMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let c = p.pos.col, r = p.pos.row
-        var moves = Set<Position>(), attacks = Set<Position>()
 
         func add(_ col: Int, _ row: Int) -> Bool {
             guard Position.valid(col: col, row: row) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
-                if hit.side != p.side { attacks.insert(pos) }
+                if hit.side != p.side { emit(pos, true) }
                 return false
             }
-            moves.insert(pos); return true
-        }
-        func occupied(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row)) != nil
+            emit(pos, false); return true
         }
 
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] {
@@ -486,31 +483,25 @@ struct Board {
             if occupied(transitCol, transitRow) { continue }
             _ = add(c + dc, r + dr)
         }
-        return (moves, attacks)
     }
 
-    // Hunter: 1 step diagonal (shieldwall), knight-shape (both-wall blocking, no jump).
-    private func hunterDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+    // Hunter: 1 step diagonal (shieldwall), knight-shape (long-axis leg block, no jump).
+    private func hunterMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let c = p.pos.col, r = p.pos.row
-        var moves = Set<Position>(), attacks = Set<Position>()
 
-        func add(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
+        func add(_ col: Int, _ row: Int) {
+            guard Position.valid(col: col, row: row) else { return }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
-                if hit.side != p.side { attacks.insert(pos) }
-                return false
+                if hit.side != p.side { emit(pos, true) }
+            } else {
+                emit(pos, false)
             }
-            moves.insert(pos); return true
-        }
-        func occupied(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
-            return piece(at: Position(col: col, row: row)) != nil
         }
 
         for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
             if occupied(c, r + dr) && occupied(c + dc, r) { continue }
-            _ = add(c + dc, r + dr)
+            add(c + dc, r + dr)
         }
         // Knight moves cannot jump: blocked if the square one step toward the
         // destination's longer axis (the "leg") is occupied — same as the Dwarf.
@@ -518,30 +509,27 @@ struct Board {
             let legCol = c + (abs(dc) > abs(dr) ? dc / 2 : 0)
             let legRow = r + (abs(dr) > abs(dc) ? dr / 2 : 0)
             if occupied(legCol, legRow) { continue }
-            _ = add(c + dc, r + dr)
+            add(c + dc, r + dr)
         }
-        return (moves, attacks)
     }
 
     // Bowman: slides straight forward up to 4, 1 step sideways each direction.
-    private func bowmanDests(for p: Piece) -> (Set<Position>, Set<Position>) {
+    private func bowmanMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
-        var moves = Set<Position>(), attacks = Set<Position>()
 
         func add(_ col: Int, _ row: Int) -> Bool {
             guard Position.valid(col: col, row: row) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
-                if hit.side != p.side { attacks.insert(pos) }
+                if hit.side != p.side { emit(pos, true) }
                 return false
             }
-            moves.insert(pos); return true
+            emit(pos, false); return true
         }
 
         for step in 1...4 { guard add(c, r + step * fwd) else { break } }
         for dc in [-1, 1] { _ = add(c + dc, r) }
-        return (moves, attacks)
     }
 
     // MARK: Starting position
@@ -638,7 +626,9 @@ class GameState: ObservableObject {
     @Published var analysisTurn: Side = .red    // side to move in the analysed pos
     private var analysisGen = 0
     private let analysisQueue = DispatchQueue(label: "drott.analysis", qos: .userInitiated)
-    private let analysisTime = 0.3
+    /// The live eval is searched as deeply as the playing engine so it is stable
+    /// (a shallow eval swings wildly between transient threats).
+    private let analysisTime = 1.2
 
     // Deep post-game analysis: Red-perspective eval per ply (nil = not computed
     // yet), for the evaluation graph. Runs the engine longer, capped at depth 22.

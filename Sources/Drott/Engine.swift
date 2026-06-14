@@ -63,16 +63,20 @@ struct TTEntry {
 final class SearchContext {
     let deadline: Date
     let rep: Repetition
+    private let boardN: Int
+    private let boardSq: Int   // N*N, precomputed for historyIndex
     var tt: [UInt64: TTEntry] = [:]
     private var killers: [Move?]                 // 2 slots per ply
-    private var history: [Int]                   // [fromIndex * 121 + toIndex]
+    private var history: [Int]                   // [(fromSquare * sq) + toSquare]
     private var deadlineCheck = 0
 
-    init(deadline: Date, rep: Repetition) {
+    init(deadline: Date, rep: Repetition, boardN: Int) {
         self.deadline = deadline
         self.rep = rep
+        self.boardN = boardN
+        self.boardSq = boardN * boardN
         killers = Array(repeating: nil, count: (Engine.maxDepth + 2) * 2)
-        history = Array(repeating: 0, count: 121 * 121)
+        history = Array(repeating: 0, count: boardSq * boardSq)
         tt.reserveCapacity(1 << 13)
     }
 
@@ -95,7 +99,7 @@ final class SearchContext {
     }
 
     @inline(__always) private func historyIndex(_ m: Move) -> Int {
-        (m.from.col + m.from.row * 11) * 121 + (m.to.col + m.to.row * 11)
+        (m.from.col + m.from.row * boardN) * boardSq + (m.to.col + m.to.row * boardN)
     }
 
     func historyScore(_ m: Move) -> Int { history[historyIndex(m)] }
@@ -164,7 +168,7 @@ enum Engine {
                        timeLimit: TimeInterval,
                        depthLimit: Int = maxDepth) -> SearchResult {
         let ctx = SearchContext(deadline: Date().addingTimeInterval(timeLimit),
-                                rep: Repetition(history))
+                                rep: Repetition(history), boardN: board.N)
         var ordering = orderMoves(board.legalMoves(), board: board, ctx: ctx, ply: 0, ttMove: nil)
 
         guard !ordering.isEmpty else {
@@ -458,7 +462,7 @@ enum Engine {
 
             // Skjolding advancement toward the enemy.
             if p.type == .skjolding {
-                let advance = p.side == .red ? p.pos.row : (10 - p.pos.row)
+                let advance = p.side == .red ? p.pos.row : (board.N - 1 - p.pos.row)
                 score += sgn * advance * 4
             }
 
@@ -467,21 +471,23 @@ enum Engine {
             }
 
             // Fort bookkeeping.
-            if Position.isFort(p.pos, for: p.side) {
+            if board.isFort(p.pos, for: p.side) {
                 if p.side == me { myFortDefenders += 1 } else { oppFortDefenders += 1 }
             }
-            if p.side == me  && Position.isFort(p.pos, for: opp) { myInOppFort += 1 }
-            if p.side == opp && Position.isFort(p.pos, for: me)  { oppInMyFort += 1 }
+            if p.side == me  && board.isFort(p.pos, for: opp) { myInOppFort += 1 }
+            if p.side == opp && board.isFort(p.pos, for: me)  { oppInMyFort += 1 }
         }
+
+        let castlePos = board.castle
 
         // Win condition 2 — king toward / on the castle. A king already on the
         // castle is a standing threat to win next turn (the search resolves
         // whether the opponent can capture or dislodge it).
         if let k = myKing {
-            score += (k == .castle) ? 5000 : (5 - k.chebyshev(to: .castle)) * 6
+            score += (k == castlePos) ? 5000 : (5 - k.chebyshev(to: castlePos)) * 6
         }
         if let k = oppKing {
-            score -= (k == .castle) ? 5000 : (5 - k.chebyshev(to: .castle)) * 6
+            score -= (k == castlePos) ? 5000 : (5 - k.chebyshev(to: castlePos)) * 6
         }
 
         // Win condition 3 — fort attack and defense.

@@ -2,49 +2,80 @@ import Foundation
 import Combine
 import CoreGraphics
 
-/// On-screen size of one board square, in points. Shared by the views and by
-/// the drag-to-move hit-testing in `GameState`.
-let SQ: CGFloat = 54
+/// On-screen size of one board square, in points. Updated by GameState when
+/// board size changes; shared by views and drag hit-testing.
+var SQ: CGFloat = 60
+
+// MARK: - Board size
+
+enum BoardSize: String, CaseIterable, Identifiable {
+    case nine  = "9×9"
+    case eleven = "11×11"
+    var id: String { rawValue }
+    var N: Int { self == .nine ? 9 : 11 }
+    var squareSize: CGFloat { self == .nine ? 60 : 54 }
+}
 
 // MARK: - Position
 
 struct Position: Equatable, Hashable, CustomStringConvertible {
-    let col: Int  // 0–10  →  A–K
-    let row: Int  // 0–10  →  rows 1–11 (0 = row 1 = bottom for Red)
+    let col: Int
+    let row: Int
 
     var colLabel: String { String(UnicodeScalar(65 + col)!) }
     var rowLabel: Int    { row + 1 }
     var description: String { "\(colLabel)\(rowLabel)" }
 
-    static let castle = Position(col: 5, row: 5)  // F6
+    // MARK: Castle
 
-    // Fort: the squares occupied by officers (non-Skjolding) at game start.
-    static let redFortSquares: Set<Position> = [
-        Position(col:3,row:0), Position(col:4,row:0), Position(col:5,row:0),
-        Position(col:6,row:0), Position(col:7,row:0),
-        Position(col:4,row:1), Position(col:5,row:1), Position(col:6,row:1)
-    ]
-    static let blackFortSquares: Set<Position> = [
-        Position(col:3,row:10), Position(col:4,row:10), Position(col:5,row:10),
-        Position(col:6,row:10), Position(col:7,row:10),
-        Position(col:4,row:9),  Position(col:5,row:9),  Position(col:6,row:9)
-    ]
-    static func isRedFort(_ p: Position)        -> Bool { redFortSquares.contains(p) }
-    static func isBlackFort(_ p: Position)      -> Bool { blackFortSquares.contains(p) }
-    static func isFort(_ p: Position)           -> Bool { isRedFort(p) || isBlackFort(p) }
-    static func isFort(_ p: Position, for s: Side) -> Bool { s == .red ? isRedFort(p) : isBlackFort(p) }
+    static func castle(N: Int) -> Position { Position(col: N / 2, row: N / 2) }
 
-    // Castle zone: 3×3 around F6 plus 3-square orthogonal arms in each direction.
-    static func isCastleZone(_ p: Position) -> Bool {
-        let c = castle
+    // MARK: Fort squares
+
+    static func redFortSquares(N: Int) -> Set<Position> {
+        if N == 9 {
+            return [
+                Position(col:2,row:0), Position(col:3,row:0), Position(col:4,row:0),
+                Position(col:5,row:0), Position(col:6,row:0),
+                Position(col:3,row:1), Position(col:4,row:1), Position(col:5,row:1)
+            ]
+        } else {
+            return [
+                Position(col:3,row:0), Position(col:4,row:0), Position(col:5,row:0),
+                Position(col:6,row:0), Position(col:7,row:0),
+                Position(col:4,row:1), Position(col:5,row:1), Position(col:6,row:1)
+            ]
+        }
+    }
+
+    static func blackFortSquares(N: Int) -> Set<Position> {
+        if N == 9 {
+            return [
+                Position(col:2,row:8), Position(col:3,row:8), Position(col:4,row:8),
+                Position(col:5,row:8), Position(col:6,row:8),
+                Position(col:3,row:7), Position(col:4,row:7), Position(col:5,row:7)
+            ]
+        } else {
+            return [
+                Position(col:3,row:10), Position(col:4,row:10), Position(col:5,row:10),
+                Position(col:6,row:10), Position(col:7,row:10),
+                Position(col:4,row:9),  Position(col:5,row:9),  Position(col:6,row:9)
+            ]
+        }
+    }
+
+    // MARK: Castle zone: 3×3 around the castle plus 3-square orthogonal arms.
+
+    static func isCastleZone(_ p: Position, N: Int) -> Bool {
+        let c = castle(N: N)
         if abs(p.col - c.col) <= 1 && abs(p.row - c.row) <= 1 { return true }
         if p.col == c.col && abs(p.row - c.row) <= 3 { return true }
         if p.row == c.row && abs(p.col - c.col) <= 3 { return true }
         return false
     }
 
-    static func valid(col: Int, row: Int) -> Bool {
-        (0..<11).contains(col) && (0..<11).contains(row)
+    static func valid(col: Int, row: Int, N: Int) -> Bool {
+        (0..<N).contains(col) && (0..<N).contains(row)
     }
 
     /// Chebyshev (king-move) distance.
@@ -139,31 +170,45 @@ enum OpponentMode: Hashable {
 // share identical logic.
 
 struct Board {
-    static let N = 11
-
-    var squares: [Piece?]          // count 121, indexed col + row*N
+    let size: BoardSize
+    var squares: [Piece?]          // count N*N, indexed col + row*N
     var sideToMove: Side
     var winner: Side?
     var winReason: WinReason?
 
-    init() {
-        squares = Array(repeating: nil, count: Board.N * Board.N)
+    var N: Int { size.N }
+
+    init(size: BoardSize = .nine) {
+        self.size = size
+        squares = Array(repeating: nil, count: size.N * size.N)
         sideToMove = .red
         winner = nil
         winReason = nil
         setupStart()
     }
 
+    // MARK: Castle & fort helpers (board-size-aware)
+
+    var castle: Position { Position.castle(N: N) }
+    var redFortSquares:   Set<Position> { Position.redFortSquares(N: N) }
+    var blackFortSquares: Set<Position> { Position.blackFortSquares(N: N) }
+
+    func isRedFort(_ p: Position)   -> Bool { redFortSquares.contains(p) }
+    func isBlackFort(_ p: Position) -> Bool { blackFortSquares.contains(p) }
+    func isFort(_ p: Position)      -> Bool { isRedFort(p) || isBlackFort(p) }
+    func isFort(_ p: Position, for s: Side) -> Bool { s == .red ? isRedFort(p) : isBlackFort(p) }
+    func isCastleZone(_ p: Position) -> Bool { Position.isCastleZone(p, N: N) }
+
     // MARK: Access
 
-    @inline(__always) func index(_ col: Int, _ row: Int) -> Int { col + row * Board.N }
-    @inline(__always) func index(_ p: Position) -> Int { p.col + p.row * Board.N }
+    @inline(__always) func index(_ col: Int, _ row: Int) -> Int { col + row * N }
+    @inline(__always) func index(_ p: Position) -> Int { p.col + p.row * N }
 
     /// Returns nil for off-board positions. The movement rules rely on this:
     /// they probe neighbouring squares (e.g. one rank ahead) without bounds
     /// checking first, so an off-board probe must be a safe miss, not a trap.
     func piece(at pos: Position) -> Piece? {
-        guard Position.valid(col: pos.col, row: pos.row) else { return nil }
+        guard Position.valid(col: pos.col, row: pos.row, N: N) else { return nil }
         return squares[index(pos)]
     }
 
@@ -254,7 +299,7 @@ struct Board {
         // The side now to move wins if a castle/fort claim it created last turn
         // has survived to this point.
         let claimant = b.sideToMove
-        if b.kingPosition(of: claimant) == .castle {
+        if b.kingPosition(of: claimant) == b.castle {
             b.winner = claimant
             b.winReason = .castle
         } else if b.hasFortControl(claimant) {
@@ -273,8 +318,8 @@ struct Board {
         var opponentDefends = false
         for sq in squares {
             guard let p = sq else { continue }
-            if p.side == side && Position.isFort(p.pos, for: opp) { inOpponentFort = true }
-            if p.side == opp  && Position.isFort(p.pos, for: opp) { opponentDefends = true }
+            if p.side == side && isFort(p.pos, for: opp) { inOpponentFort = true }
+            if p.side == opp  && isFort(p.pos, for: opp) { opponentDefends = true }
         }
         return inOpponentFort && !opponentDefends
     }
@@ -327,7 +372,7 @@ struct Board {
 
     @inline(__always)
     private func occupied(_ col: Int, _ row: Int) -> Bool {
-        guard Position.valid(col: col, row: row) else { return false }
+        guard Position.valid(col: col, row: row, N: N) else { return false }
         return squares[index(col, row)] != nil
     }
 
@@ -338,7 +383,7 @@ struct Board {
         let c = p.pos.col, r = p.pos.row
 
         func add(_ col: Int, _ row: Int) {
-            guard Position.valid(col: col, row: row) else { return }
+            guard Position.valid(col: col, row: row, N: N) else { return }
             let dest = Position(col: col, row: row)
             if let hit = piece(at: dest) {
                 if hit.side != p.side { emit(dest, true) }
@@ -361,7 +406,7 @@ struct Board {
         let c = p.pos.col, r = p.pos.row
 
         func add(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
+            guard Position.valid(col: col, row: row, N: N) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
                 if hit.side != p.side { emit(pos, true) }
@@ -384,7 +429,7 @@ struct Board {
         let c = p.pos.col, r = p.pos.row
 
         func add(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
+            guard Position.valid(col: col, row: row, N: N) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
                 if hit.side != p.side { emit(pos, true) }
@@ -413,7 +458,7 @@ struct Board {
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] {
             var col = p.pos.col + dc, row = p.pos.row + dr
             for _ in 1...3 {
-                guard Position.valid(col: col, row: row) else { break }
+                guard Position.valid(col: col, row: row, N: N) else { break }
                 let pos = Position(col: col, row: row)
                 if let hit = piece(at: pos) {
                     if hit.side != p.side { emit(pos, true) }
@@ -428,7 +473,7 @@ struct Board {
     // Elf: 1 step orthogonally in any direction, plus diagonal slide up to 4 steps.
     private func elfMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         func add(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
+            guard Position.valid(col: col, row: row, N: N) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
                 if hit.side != p.side { emit(pos, true) }
@@ -448,7 +493,7 @@ struct Board {
     private func kingMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)] {
             let col = p.pos.col + dc, row = p.pos.row + dr
-            guard Position.valid(col: col, row: row) else { continue }
+            guard Position.valid(col: col, row: row, N: N) else { continue }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) { if hit.side != p.side { emit(pos, true) } }
             else { emit(pos, false) }
@@ -460,7 +505,7 @@ struct Board {
         let c = p.pos.col, r = p.pos.row
 
         func add(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
+            guard Position.valid(col: col, row: row, N: N) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
                 if hit.side != p.side { emit(pos, true) }
@@ -490,7 +535,7 @@ struct Board {
         let c = p.pos.col, r = p.pos.row
 
         func add(_ col: Int, _ row: Int) {
-            guard Position.valid(col: col, row: row) else { return }
+            guard Position.valid(col: col, row: row, N: N) else { return }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
                 if hit.side != p.side { emit(pos, true) }
@@ -519,7 +564,7 @@ struct Board {
         let c = p.pos.col, r = p.pos.row
 
         func add(_ col: Int, _ row: Int) -> Bool {
-            guard Position.valid(col: col, row: row) else { return false }
+            guard Position.valid(col: col, row: row, N: N) else { return false }
             let pos = Position(col: col, row: row)
             if let hit = piece(at: pos) {
                 if hit.side != p.side { emit(pos, true) }
@@ -532,18 +577,58 @@ struct Board {
         for dc in [-1, 1] { _ = add(c + dc, r) }
     }
 
-    // MARK: Starting position
+    // MARK: Starting positions
     //
-    // Red (bottom):  rank 1: C1 V · D1 Wo · E1 El · F1 K · G1 Dw · H1 Hu · I1 V
-    //                rank 2: D2 V · E2 Bk · F2 Sp · G2 Bw · H2 V
-    //                rank 3: E3 V · F3 V · G3 V
-    // Black (top): point-symmetric (col→10-col, row→10-row).
+    // 9×9 (default):
+    //   Red row 0: B1 V · C1 Wo · D1 El · E1 K · F1 Dw · G1 Hu · H1 V
+    //   Red row 1: C2 V · D2 Bk · E2 Sp · F2 Bw · G2 V
+    //   Black: point-symmetric (col→8-col, row→8-row)
+    //
+    // 11×11:
+    //   Red row 0: C1 V · D1 Wo · E1 El · F1 K · G1 Dw · H1 Hu · I1 V
+    //   Red row 1: D2 V · E2 Bk · F2 Sp · G2 Bw · H2 V
+    //   Red row 2: E3 V · F3 V · G3 V
+    //   Black: point-symmetric (col→10-col, row→10-row)
 
     private mutating func place(_ type: PieceType, _ side: Side, col: Int, row: Int) {
         squares[index(col, row)] = Piece(type: type, side: side, pos: Position(col: col, row: row))
     }
 
     private mutating func setupStart() {
+        if N == 9 { setup9x9() } else { setup11x11() }
+    }
+
+    private mutating func setup9x9() {
+        // Red
+        place(.skjolding, .red, col: 1, row: 0)
+        place(.wolf,      .red, col: 2, row: 0)
+        place(.elf,       .red, col: 3, row: 0)
+        place(.king,      .red, col: 4, row: 0)
+        place(.dwarf,     .red, col: 5, row: 0)
+        place(.hunter,    .red, col: 6, row: 0)
+        place(.skjolding, .red, col: 7, row: 0)
+        place(.skjolding, .red, col: 2, row: 1)
+        place(.berserker, .red, col: 3, row: 1)
+        place(.spearman,  .red, col: 4, row: 1)
+        place(.bowman,    .red, col: 5, row: 1)
+        place(.skjolding, .red, col: 6, row: 1)
+
+        // Black (point-symmetric: col→8-col, row→8-row)
+        place(.skjolding, .black, col: 7, row: 8)
+        place(.wolf,      .black, col: 6, row: 8)
+        place(.elf,       .black, col: 5, row: 8)
+        place(.king,      .black, col: 4, row: 8)
+        place(.dwarf,     .black, col: 3, row: 8)
+        place(.hunter,    .black, col: 2, row: 8)
+        place(.skjolding, .black, col: 1, row: 8)
+        place(.skjolding, .black, col: 6, row: 7)
+        place(.berserker, .black, col: 5, row: 7)
+        place(.spearman,  .black, col: 4, row: 7)
+        place(.bowman,    .black, col: 3, row: 7)
+        place(.skjolding, .black, col: 2, row: 7)
+    }
+
+    private mutating func setup11x11() {
         // Red
         place(.skjolding, .red, col: 2, row: 0)
         place(.wolf,      .red, col: 3, row: 0)
@@ -561,7 +646,7 @@ struct Board {
         place(.skjolding, .red, col: 5, row: 2)
         place(.skjolding, .red, col: 6, row: 2)
 
-        // Black (point-symmetric)
+        // Black (point-symmetric: col→10-col, row→10-row)
         place(.skjolding, .black, col: 8, row: 10)
         place(.wolf,      .black, col: 7, row: 10)
         place(.elf,       .black, col: 6, row: 10)
@@ -614,6 +699,9 @@ class GameState: ObservableObject {
     /// A short transient note (e.g. "Draw declined"), shown briefly.
     @Published var statusMessage: String? = nil
 
+    /// Board size for the next (or current) game.
+    @Published var boardSize: BoardSize = .nine
+
     /// Who controls each side.
     @Published var opponent: OpponentMode = .off
     /// Search time budget per move, in seconds.
@@ -661,6 +749,9 @@ class GameState: ObservableObject {
     var liveBoard: Board { history[history.count - 1] }
     /// The position currently displayed (may be in the past while scrubbing).
     var viewedBoard: Board { history[viewIndex] }
+
+    /// Convenience: board dimension for the current game.
+    var boardN: Int { liveBoard.N }
 
     /// Display helpers read the *viewed* board so scrubbing reflects the past.
     var turn: Side          { viewedBoard.sideToMove }
@@ -734,9 +825,10 @@ class GameState: ObservableObject {
     /// "New Game": clear the board and return to the setup phase. Does NOT start
     /// play — the computer only moves once the user presses Start Game.
     func reset() {
+        SQ = boardSize.squareSize
         isPlaying = false
         thinking = false
-        history = [Board()]
+        history = [Board(size: boardSize)]
         viewIndex = 0
         record = []
         drawPly = nil
@@ -750,6 +842,19 @@ class GameState: ObservableObject {
         drawAgreed = false
         statusMessage = nil
         phase = .setup
+        scheduleAnalysis()
+    }
+
+    /// Change the board size during setup. Refreshes the starting position.
+    func setBoardSize(_ s: BoardSize) {
+        guard phase == .setup else { return }
+        boardSize = s
+        SQ = s.squareSize
+        history = [Board(size: s)]
+        viewIndex = 0
+        record = []
+        graphScores = [nil]
+        clearSelection()
         scheduleAnalysis()
     }
 
@@ -930,7 +1035,7 @@ class GameState: ObservableObject {
         guard dragOrigin == pos, let p = board.piece(at: pos) else { return }
 
         let target = GameState.dropTarget(from: pos, translation: translation)
-        guard Position.valid(col: target.col, row: target.row) else {
+        guard Position.valid(col: target.col, row: target.row, N: board.N) else {
             clearSelection(); return
         }
         let (m, a) = board.validDestinations(for: p)
@@ -1271,7 +1376,7 @@ class GameState: ObservableObject {
     // MARK: File-based command interface
     // Write commands to /tmp/drott_cmd.txt:
     //   "tap F6" · "reset" · "ai black|red|off" · "self" · "play" · "pause"
-    //   "back" · "fwd" · "go"
+    //   "back" · "fwd" · "go" · "size 9" · "size 11"
 
     func startCommandListener() {
         let path = "/tmp/drott_cmd.txt"
@@ -1291,17 +1396,24 @@ class GameState: ObservableObject {
     private func processCommand(_ cmd: String) {
         let parts = cmd.split(separator: " ").map(String.init)
         guard let verb = parts.first else { return }
+        let n = liveBoard.N
         switch verb {
         case "tap":
             guard let posStr = parts.dropFirst().first, posStr.count == 2,
                   let colChar = posStr.first?.uppercased().first,
                   let colAscii = colChar.asciiValue,
-                  colAscii >= 65, colAscii <= 75,
+                  colAscii >= 65, colAscii < 65 + UInt8(n),
                   let rowNum = Int(posStr.dropFirst()),
-                  (1...11).contains(rowNum) else { return }
+                  (1...n).contains(rowNum) else { return }
             tap(Position(col: Int(colAscii) - 65, row: rowNum - 1))
         case "reset":
             reset()
+        case "size":
+            switch parts.dropFirst().first {
+            case "9":  setBoardSize(.nine)
+            case "11": setBoardSize(.eleven)
+            default: break
+            }
         case "ai":
             switch parts.dropFirst().first {
             case "red":   setOpponent(.computerRed)
@@ -1342,7 +1454,8 @@ class GameState: ObservableObject {
 extension Board: Equatable {
     static func == (l: Board, r: Board) -> Bool {
         guard l.sideToMove == r.sideToMove,
-              l.winner == r.winner else { return false }
+              l.winner == r.winner,
+              l.N == r.N else { return false }
         for i in 0..<l.squares.count {
             switch (l.squares[i], r.squares[i]) {
             case (nil, nil): continue

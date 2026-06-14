@@ -7,9 +7,9 @@ import Foundation
 
 extension Board {
     /// A board with no pieces (for constructing test positions).
-    static func empty() -> Board {
-        var b = Board()
-        b.squares = Array(repeating: nil, count: Board.N * Board.N)
+    static func empty(size: BoardSize = .nine) -> Board {
+        var b = Board(size: size)
+        b.squares = Array(repeating: nil, count: b.N * b.N)
         b.winner = nil
         b.winReason = nil
         return b
@@ -76,14 +76,15 @@ enum SelfTest {
     // — where a forward/knight probe lands outside the board — are the risk.
     private static func edgeProbing() {
         print("[edge probing]")
+        let n = Board().N   // test the default board size
         var combos = 0
         for type in PieceType.allCases {
             for side in Side.allCases {
-                for row in 0..<Board.N {
-                    for col in 0..<Board.N {
+                for row in 0..<n {
+                    for col in 0..<n {
                         var b = Board.empty()
-                        b.put(.king, .red, Position(col: 0, row: 0))
-                        b.put(.king, .black, Position(col: 10, row: 10))
+                        b.put(.king, .red,   Position(col: 0,     row: 0))
+                        b.put(.king, .black, Position(col: n - 1, row: n - 1))
                         b.put(type, side, Position(col: col, row: row))
                         b.sideToMove = side
                         _ = b.legalMoves()    // would trap on an off-board probe
@@ -94,7 +95,7 @@ enum SelfTest {
             }
         }
         // Reaching here means no out-of-bounds access occurred.
-        check(combos == PieceType.allCases.count * 2 * Board.N * Board.N,
+        check(combos == PieceType.allCases.count * 2 * n * n,
               "move-gen safe for every piece on every square (\(combos) combos)")
     }
 
@@ -120,8 +121,8 @@ enum SelfTest {
         b.put(.king, .black, Position(col: 2, row: 2))   // C3
         b.put(.wolf, .red, Position(col: 2, row: 0))     // C1
         // A couple of decoys so the capture isn't the only move.
-        b.put(.skjolding, .red, Position(col: 9, row: 0))
-        b.put(.skjolding, .black, Position(col: 9, row: 10))
+        b.put(.skjolding, .red, Position(col: 7, row: 0))
+        b.put(.skjolding, .black, Position(col: 7, row: 8))
         b.sideToMove = .red
         let best = Engine.bestMove(for: b, timeLimit: 1.0)
         check(best?.to == Position(col: 2, row: 2), "engine plays the king capture (got \(best.map { "\($0.from)-\($0.to)" } ?? "nil"))")
@@ -131,30 +132,32 @@ enum SelfTest {
     private static func fortControl() {
         print("[fort control]")
         var b = Board.empty()
-        b.put(.king, .red, Position(col: 0, row: 0))
-        b.put(.king, .black, Position(col: 10, row: 10))
-        b.put(.skjolding, .red, Position(col: 3, row: 10))   // red on D11 (black fort)
+        b.put(.king, .red,   Position(col: 0, row: 0))
+        b.put(.king, .black, Position(col: 8, row: 8))
+        b.put(.skjolding, .red, Position(col: 3, row: 8))   // red on D9 (black fort in 9×9)
         check(b.hasFortControl(.red), "red controls empty black fort")
         check(!b.hasFortControl(.black), "black does not control red's fort")
 
-        b.put(.skjolding, .black, Position(col: 4, row: 10)) // E11 defender
+        b.put(.skjolding, .black, Position(col: 4, row: 8)) // E9 defender
         check(!b.hasFortControl(.red), "a black defender denies red's fort control")
     }
 
-    // Castle hold: king on F6 is NOT an immediate win — it wins only once it
-    // becomes Red's turn again with the king still there.
+    // Castle hold: king on the castle square is NOT an immediate win — it wins
+    // only once it becomes Red's turn again with the king still there.
     private static func castleHold() {
         print("[castle hold]")
         var b = Board.empty()
-        b.put(.king, .red, Position(col: 4, row: 5))     // E6, next to castle
-        b.put(.king, .black, Position(col: 10, row: 10))
-        b.put(.skjolding, .black, Position(col: 0, row: 10)) // A11 — has a reply
+        // 9×9 castle = E5 = (4,4); place king one step to the left at D5 = (3,4)
+        b.put(.king, .red, Position(col: 3, row: 4))     // D5, next to castle
+        b.put(.king, .black, Position(col: 8, row: 8))   // far corner
+        b.put(.skjolding, .black, Position(col: 0, row: 8)) // A9 — has a reply
         b.sideToMove = .red
+        let castlePos = b.castle    // (4,4) for 9×9
 
-        let onCastle = b.applying(Move(from: Position(col: 4, row: 5),
-                                       to: Position(col: 5, row: 5), isCapture: false))
+        let onCastle = b.applying(Move(from: Position(col: 3, row: 4),
+                                       to: castlePos, isCapture: false))
         check(onCastle.winner == nil, "not won immediately on entering the castle")
-        check(onCastle.piece(at: .castle)?.side == .red, "red king reached the castle")
+        check(onCastle.piece(at: castlePos)?.side == .red, "red king reached the castle")
         check(onCastle.sideToMove == .black, "turn passes to black")
 
         // Black replies harmlessly; red then wins by still holding the castle.
@@ -168,27 +171,28 @@ enum SelfTest {
     // opponent can deny it by capturing the intruder before it survives a turn.
     private static func fortTiming() {
         print("[fort timing]")
-        let d8 = Position(col: 3, row: 7)
-        let d11 = Position(col: 3, row: 10)   // black fort square
-        let wolfIn = Move(from: d8, to: d11, isCapture: false)
+        // 9×9 black fort: rows 7-8, cols 2-6. Use D9=(3,8) as the entry square.
+        let wolfStart = Position(col: 3, row: 5)   // D6, 3 rows from D9
+        let d9 = Position(col: 3, row: 8)          // D9, black fort in 9×9
+        let wolfIn = Move(from: wolfStart, to: d9, isCapture: false)
 
-        // Denial by capture: a Black king on C11 can take the intruder.
+        // Denial by capture: a Black king on C9 can take the intruder.
         var denied = Board.empty()
         denied.put(.king, .red, Position(col: 0, row: 0))
-        denied.put(.wolf, .red, d8)
-        denied.put(.king, .black, Position(col: 2, row: 10))  // C11, adjacent to D11
+        denied.put(.wolf, .red, wolfStart)
+        denied.put(.king, .black, Position(col: 2, row: 8))  // C9, adjacent to D9
         denied.sideToMove = .red
         let entered = denied.applying(wolfIn)
         check(entered.winner == nil, "entering the fort is not an immediate win")
-        let capture = entered.applying(Move(from: Position(col: 2, row: 10), to: d11, isCapture: true))
+        let capture = entered.applying(Move(from: Position(col: 2, row: 8), to: d9, isCapture: true))
         check(capture.winner == nil, "opponent denies the fort by capturing the intruder")
 
-        // Survival: with no Black piece able to reach D11, Red wins next turn.
+        // Survival: with no Black piece able to reach D9, Red wins next turn.
         var survives = Board.empty()
         survives.put(.king, .red, Position(col: 0, row: 0))
-        survives.put(.wolf, .red, d8)
-        survives.put(.king, .black, Position(col: 10, row: 0))   // far away
-        survives.put(.skjolding, .black, Position(col: 0, row: 8)) // a harmless reply
+        survives.put(.wolf, .red, wolfStart)
+        survives.put(.king, .black, Position(col: 8, row: 0))   // far away at I1
+        survives.put(.skjolding, .black, Position(col: 0, row: 6)) // a harmless reply at A7
         survives.sideToMove = .red
         let in2 = survives.applying(wolfIn)
         check(in2.winner == nil, "still not won the instant the fort is entered")
@@ -206,7 +210,7 @@ enum SelfTest {
         print("[free capture]")
         var b = Board.empty()
         b.put(.king, .red, Position(col: 0, row: 0))
-        b.put(.king, .black, Position(col: 10, row: 10))
+        b.put(.king, .black, Position(col: 8, row: 8))
         b.put(.bowman, .black, Position(col: 4, row: 5))     // E6
         b.put(.skjolding, .red, Position(col: 4, row: 4))    // E5, blocks the bowman
         b.put(.skjolding, .red, Position(col: 3, row: 4))    // D5, can take E6 diagonally
@@ -222,14 +226,14 @@ enum SelfTest {
     // must not leap out between the Skjoldings.
     private static func hunterBoxedIn() {
         print("[hunter boxed in]")
-        let b = Board()
-        let hunter = b.piece(at: Position(col: 7, row: 0))!   // red Hunter at H1
-        check(hunter.type == .hunter, "found the Hunter at H1")
+        let b = Board()   // 9×9 default
+        let hunter = b.piece(at: Position(col: 6, row: 0))!   // red Hunter at G1 in 9×9
+        check(hunter.type == .hunter, "found the Hunter at G1")
         let (m, a) = b.validDestinations(for: hunter)
-        let i3 = Position(col: 8, row: 2)
-        let j2 = Position(col: 9, row: 1)
-        check(!m.contains(i3) && !a.contains(i3), "Hunter does not leap to I3 at the start")
-        check(!m.contains(j2) && !a.contains(j2), "Hunter does not leap to J2 at the start")
+        let h3 = Position(col: 7, row: 2)   // would require leaping over H1/G2
+        let i2 = Position(col: 8, row: 1)   // would require leaping over H1
+        check(!m.contains(h3) && !a.contains(h3), "Hunter does not leap to H3 at the start")
+        check(!m.contains(i2) && !a.contains(i2), "Hunter does not leap to I2 at the start")
         check(m.isEmpty && a.isEmpty, "Hunter is fully boxed in at the start")
     }
 
@@ -238,15 +242,15 @@ enum SelfTest {
     private static func threefold() {
         print("[threefold repetition]")
         var b = Board.empty()
-        b.put(.king, .red, Position(col: 0, row: 0))     // A1
-        b.put(.king, .black, Position(col: 10, row: 10)) // K11
+        b.put(.king, .red, Position(col: 0, row: 0))    // A1
+        b.put(.king, .black, Position(col: 8, row: 8))  // I9 (far corner in 9×9)
         b.sideToMove = .red
 
         let cycle = [
-            Move(from: Position(col: 0, row: 0),   to: Position(col: 1, row: 0),   isCapture: false),
-            Move(from: Position(col: 10, row: 10), to: Position(col: 9, row: 10),  isCapture: false),
-            Move(from: Position(col: 1, row: 0),   to: Position(col: 0, row: 0),   isCapture: false),
-            Move(from: Position(col: 9, row: 10),  to: Position(col: 10, row: 10), isCapture: false),
+            Move(from: Position(col: 0, row: 0), to: Position(col: 1, row: 0), isCapture: false),
+            Move(from: Position(col: 8, row: 8), to: Position(col: 7, row: 8), isCapture: false),
+            Move(from: Position(col: 1, row: 0), to: Position(col: 0, row: 0), isCapture: false),
+            Move(from: Position(col: 7, row: 8), to: Position(col: 8, row: 8), isCapture: false),
         ]
 
         var history = [b]
@@ -272,23 +276,23 @@ enum SelfTest {
     // that draw when the history makes it available.
     private static func repetitionAwareEngine() {
         print("[repetition-aware engine]")
-        let redKing  = Position(col: 5, row: 2)   // F3, central & safe
-        let redWolf  = Position(col: 5, row: 5)   // F6
-        let blackA11 = Position(col: 0, row: 10)  // A11 corner, far from Red
-        let blackB11 = Position(col: 1, row: 10)  // B11
+        let redKing = Position(col: 5, row: 2)   // F3, central & safe (valid in 9×9)
+        let redWolf = Position(col: 5, row: 5)   // F6 (valid in 9×9)
+        let blackA9 = Position(col: 0, row: 8)   // A9 corner, far from Red
+        let blackB9 = Position(col: 1, row: 8)   // B9
 
         // Root: Black to move, down a Wolf, no tactics available either way.
         var root = Board.empty()
         root.put(.king, .red, redKing)
         root.put(.wolf, .red, redWolf)
-        root.put(.king, .black, blackA11)
+        root.put(.king, .black, blackA9)
         root.sideToMove = .black
 
-        // The position after Black shuffles A11–B11 (Red to move).
+        // The position after Black shuffles A9–B9 (Red to move).
         var child = Board.empty()
         child.put(.king, .red, redKing)
         child.put(.wolf, .red, redWolf)
-        child.put(.king, .black, blackB11)
+        child.put(.king, .black, blackB9)
         child.sideToMove = .red
 
         // Without history, Black is losing (Red marches the Wolf into Black's
@@ -296,7 +300,7 @@ enum SelfTest {
         let losing = Engine.search(root, history: [root], timeLimit: 0.3)
         check(losing.score < 0, "without history Black is losing (\(losing.score))")
 
-        // With `child` already seen twice, A11–B11 completes a threefold → a draw
+        // With `child` already seen twice, A9–B9 completes a threefold → a draw
         // the engine prefers to the losing line.
         let saved = Engine.search(root, history: [child, child, root], timeLimit: 0.3)
         check(saved.score == 0, "engine claims the repetition draw (score \(saved.score))")

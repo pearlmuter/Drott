@@ -92,7 +92,7 @@ struct GameGraphPanel: View {
             Text("Red above the midline, Black below · click to jump to a move")
                 .font(.system(size: 9)).foregroundStyle(.tertiary)
         }
-        .frame(width: SQ * 11 + 30)   // match the board's width (bar + labels + grid)
+        .frame(width: SQ * CGFloat(game.boardN) + 30)   // match the board's width
     }
 
     static func deepSeconds(_ t: Double) -> String {
@@ -203,6 +203,17 @@ struct SidePanel: View {
     private var settingsCard: some View {
         infoCard {
             VStack(alignment: .leading, spacing: 6) {
+                fieldLabel("BOARD SIZE")
+                Picker("", selection: Binding(
+                    get: { game.boardSize },
+                    set: { game.setBoardSize($0) }
+                )) {
+                    ForEach(BoardSize.allCases) { size in
+                        Text(size.rawValue).tag(size)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 fieldLabel("COMPUTER PLAYS")
                 Picker("", selection: Binding(
                     get: { game.opponent },
@@ -421,7 +432,8 @@ struct SidePanel: View {
                     }
                     Divider().padding(.vertical, 2)
                     fieldLabel("BOARD")
-                    legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85), label: "Castle (F6)")
+                    legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85),
+                              label: "Castle (\(game.liveBoard.castle.description))")
                     legendRow(color: Color(red: 0.86, green: 0.80, blue: 0.69), label: "Fort area")
                     legendRow(color: Color(red: 0.94, green: 0.90, blue: 0.81), label: "Castle zone")
                     legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.30).opacity(0.45), label: "Last move")
@@ -499,7 +511,7 @@ struct SidePanel: View {
                     rulesSection("HOW TO WIN") {
                         """
                         1. Capture the opponent's King.
-                        2. Move your King onto the Castle (F6, centre) and survive until it is your turn again.
+                        2. Move your King onto the Castle (centre square) and survive until it is your turn again.
                         3. Have at least one of your pieces in the opponent's fort while they have no pieces in their own fort.
                         """
                     }
@@ -589,15 +601,15 @@ struct SidePanel: View {
 struct BoardView: View {
     @ObservedObject var game: GameState
 
-    private let gridSize = SQ * 11
+    private var gridSize: CGFloat { SQ * CGFloat(game.boardN) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             EvalBar(redScore: game.evalRed, height: gridSize)
 
-            // Row labels  11 … 1
+            // Row labels  N…1
             VStack(spacing: 0) {
-                ForEach((0..<11).reversed(), id: \.self) { row in
+                ForEach((0..<game.boardN).reversed(), id: \.self) { row in
                     Text("\(row + 1)")
                         .frame(width: 22, height: SQ)
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -615,9 +627,9 @@ struct BoardView: View {
                 .background(Color(red: 0.16, green: 0.16, blue: 0.18))
                 .cornerRadius(4)
 
-                // Column labels  A … K
+                // Column labels  A…I / A…K
                 HStack(spacing: 0) {
-                    ForEach(0..<11, id: \.self) { col in
+                    ForEach(0..<game.boardN, id: \.self) { col in
                         Text(String(UnicodeScalar(65 + col)!))
                             .frame(width: SQ, height: 26)
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -630,10 +642,15 @@ struct BoardView: View {
 
     private var grid: some View {
         let last = game.lastMove
+        let board = game.viewedBoard
+        let n = board.N
+        let castlePos = board.castle
+        let redFort = board.redFortSquares
+        let blackFort = board.blackFortSquares
         return VStack(spacing: 0) {
-            ForEach((0..<11).reversed(), id: \.self) { row in
+            ForEach((0..<n).reversed(), id: \.self) { row in
                 HStack(spacing: 0) {
-                    ForEach(0..<11, id: \.self) { col in
+                    ForEach(0..<n, id: \.self) { col in
                         let pos = Position(col: col, row: row)
                         SquareView(
                             pos: pos,
@@ -642,7 +659,10 @@ struct BoardView: View {
                             isMoveTarget:   game.highlightMoves.contains(pos),
                             isAttackTarget: game.highlightAttacks.contains(pos),
                             isDragOrigin:   game.dragOrigin == pos,
-                            isLastMove:     last.map { $0.from == pos || $0.to == pos } ?? false
+                            isLastMove:     last.map { $0.from == pos || $0.to == pos } ?? false,
+                            isOnCastle:     pos == castlePos,
+                            isInCastleZone: Position.isCastleZone(pos, N: n),
+                            isOnFort:       redFort.contains(pos) || blackFort.contains(pos)
                         )
                         .onTapGesture { game.tap(pos) }
                         .gesture(
@@ -666,7 +686,7 @@ struct BoardView: View {
                 .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 3)
                 .position(
                     x: CGFloat(origin.col) * SQ + SQ / 2 + game.dragTranslation.width,
-                    y: CGFloat(10 - origin.row) * SQ + SQ / 2 + game.dragTranslation.height
+                    y: CGFloat(game.boardN - 1 - origin.row) * SQ + SQ / 2 + game.dragTranslation.height
                 )
                 .allowsHitTesting(false)
         }
@@ -827,15 +847,18 @@ struct SquareView: View {
     let isAttackTarget: Bool
     var isDragOrigin: Bool = false
     var isLastMove: Bool = false
+    var isOnCastle: Bool = false
+    var isInCastleZone: Bool = false
+    var isOnFort: Bool = false
 
-    private static let normalBeige = Color(red: 0.94, green: 0.90, blue: 0.81)
-    private static let fortBeige   = Color(red: 0.86, green: 0.80, blue: 0.69)
-    private static let castleGold  = Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85)
+    private static let normalBeige  = Color(red: 0.94, green: 0.90, blue: 0.81)
+    private static let fortBeige    = Color(red: 0.86, green: 0.80, blue: 0.69)
+    private static let castleGold   = Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85)
     private static let textureBrown = Color(red: 0.35, green: 0.22, blue: 0.08)
 
     private var squareBase: Color {
-        if pos == .castle       { return Self.castleGold }
-        if Position.isFort(pos) { return Self.fortBeige }
+        if isOnCastle { return Self.castleGold }
+        if isOnFort   { return Self.fortBeige }
         return Self.normalBeige
     }
 
@@ -847,13 +870,13 @@ struct SquareView: View {
                     .fill(squareBase)
 
                 // Castle zone: dot texture
-                if Position.isCastleZone(pos) && pos != .castle {
+                if isInCastleZone && !isOnCastle {
                     castleZoneDots
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
 
                 // Fort: diagonal line texture
-                if Position.isFort(pos) {
+                if isOnFort {
                     fortDiagonals
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                 }

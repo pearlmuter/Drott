@@ -10,7 +10,6 @@ extension Board {
     static func empty() -> Board {
         var b = Board()
         b.squares = Array(repeating: nil, count: Board.N * Board.N)
-        b.castleWinPending = nil
         b.winner = nil
         b.winReason = nil
         return b
@@ -44,6 +43,8 @@ enum SelfTest {
         kingCaptureTactic()
         fortControl()
         castleHold()
+        fortTiming()
+        hunterBoxedIn()
         threefold()
         repetitionAwareEngine()
         depthCap()
@@ -125,22 +126,22 @@ enum SelfTest {
         check(best?.to == Position(col: 2, row: 2), "engine plays the king capture (got \(best.map { "\($0.from)-\($0.to)" } ?? "nil"))")
     }
 
-    // Fort control: a piece in the enemy fort while they hold none of their own.
+    // Fort control predicate: a piece in the enemy fort while they hold none.
     private static func fortControl() {
         print("[fort control]")
         var b = Board.empty()
         b.put(.king, .red, Position(col: 0, row: 0))
         b.put(.king, .black, Position(col: 10, row: 10))
-        // Red skjolding sitting on a black-fort square (D11).
-        b.put(.skjolding, .red, Position(col: 3, row: 10))
-        check(b.checkFortWin() == .red, "red controls empty black fort")
+        b.put(.skjolding, .red, Position(col: 3, row: 10))   // red on D11 (black fort)
+        check(b.hasFortControl(.red), "red controls empty black fort")
+        check(!b.hasFortControl(.black), "black does not control red's fort")
 
-        // Add a black defender to its own fort → no win.
-        b.put(.skjolding, .black, Position(col: 4, row: 10))  // E11
-        check(b.checkFortWin() == nil, "black defending its fort denies the win")
+        b.put(.skjolding, .black, Position(col: 4, row: 10)) // E11 defender
+        check(!b.hasFortControl(.red), "a black defender denies red's fort control")
     }
 
-    // Castle hold: king on F6 survives the opponent's reply and wins next turn.
+    // Castle hold: king on F6 is NOT an immediate win — it wins only once it
+    // becomes Red's turn again with the king still there.
     private static func castleHold() {
         print("[castle hold]")
         var b = Board.empty()
@@ -151,15 +152,63 @@ enum SelfTest {
 
         let onCastle = b.applying(Move(from: Position(col: 4, row: 5),
                                        to: Position(col: 5, row: 5), isCapture: false))
-        check(onCastle.castleWinPending == .red, "castle hold registered as pending")
         check(onCastle.winner == nil, "not won immediately on entering the castle")
+        check(onCastle.piece(at: .castle)?.side == .red, "red king reached the castle")
         check(onCastle.sideToMove == .black, "turn passes to black")
 
-        // Black makes any move; red should then win by holding the castle.
+        // Black replies harmlessly; red then wins by still holding the castle.
         let blackMove = onCastle.legalMoves().first!
         let resolved = onCastle.applying(blackMove)
         check(resolved.winner == .red, "red wins by holding the castle after black's reply")
         check(resolved.winReason == .castle, "win reason is castle")
+    }
+
+    // Win timing: entering the enemy fort is not an immediate win, and the
+    // opponent can deny it by capturing the intruder before it survives a turn.
+    private static func fortTiming() {
+        print("[fort timing]")
+        let d8 = Position(col: 3, row: 7)
+        let d11 = Position(col: 3, row: 10)   // black fort square
+        let wolfIn = Move(from: d8, to: d11, isCapture: false)
+
+        // Denial by capture: a Black king on C11 can take the intruder.
+        var denied = Board.empty()
+        denied.put(.king, .red, Position(col: 0, row: 0))
+        denied.put(.wolf, .red, d8)
+        denied.put(.king, .black, Position(col: 2, row: 10))  // C11, adjacent to D11
+        denied.sideToMove = .red
+        let entered = denied.applying(wolfIn)
+        check(entered.winner == nil, "entering the fort is not an immediate win")
+        let capture = entered.applying(Move(from: Position(col: 2, row: 10), to: d11, isCapture: true))
+        check(capture.winner == nil, "opponent denies the fort by capturing the intruder")
+
+        // Survival: with no Black piece able to reach D11, Red wins next turn.
+        var survives = Board.empty()
+        survives.put(.king, .red, Position(col: 0, row: 0))
+        survives.put(.wolf, .red, d8)
+        survives.put(.king, .black, Position(col: 10, row: 0))   // far away
+        survives.put(.skjolding, .black, Position(col: 0, row: 8)) // a harmless reply
+        survives.sideToMove = .red
+        let in2 = survives.applying(wolfIn)
+        check(in2.winner == nil, "still not won the instant the fort is entered")
+        let reply = in2.applying(in2.legalMoves().first!)
+        check(reply.winner == .red && reply.winReason == .fort,
+              "Red wins by holding the fort through Black's reply")
+    }
+
+    // The Hunter cannot jump: at the start it is boxed in by its own pieces and
+    // must not leap out between the Skjoldings.
+    private static func hunterBoxedIn() {
+        print("[hunter boxed in]")
+        let b = Board()
+        let hunter = b.piece(at: Position(col: 7, row: 0))!   // red Hunter at H1
+        check(hunter.type == .hunter, "found the Hunter at H1")
+        let (m, a) = b.validDestinations(for: hunter)
+        let i3 = Position(col: 8, row: 2)
+        let j2 = Position(col: 9, row: 1)
+        check(!m.contains(i3) && !a.contains(i3), "Hunter does not leap to I3 at the start")
+        check(!m.contains(j2) && !a.contains(j2), "Hunter does not leap to J2 at the start")
+        check(m.isEmpty && a.isEmpty, "Hunter is fully boxed in at the start")
     }
 
     // A position seen three times is a draw. Two kings shuffle a 4-ply cycle

@@ -143,14 +143,12 @@ struct Board {
 
     var squares: [Piece?]          // count 121, indexed col + row*N
     var sideToMove: Side
-    var castleWinPending: Side?
     var winner: Side?
     var winReason: WinReason?
 
     init() {
         squares = Array(repeating: nil, count: Board.N * Board.N)
         sideToMove = .red
-        castleWinPending = nil
         winner = nil
         winReason = nil
         setupStart()
@@ -170,8 +168,8 @@ struct Board {
     }
 
     /// A deterministic 64-bit key identifying this position for repetition
-    /// detection: occupancy (type+side) + side to move + castle-pending state.
-    /// FNV-1a so it does not depend on Swift's per-run hash seed.
+    /// detection and the transposition table: occupancy (type+side) + side to
+    /// move. FNV-1a so it does not depend on Swift's per-run hash seed.
     var repetitionKey: UInt64 {
         var h: UInt64 = 14695981039346656037
         @inline(__always) func mix(_ b: UInt8) { h = (h ^ UInt64(b)) &* 1099511628211 }
@@ -179,11 +177,6 @@ struct Board {
             if let p = sq { mix((p.side == .red ? 0 : 100) + p.type.code) } else { mix(0) }
         }
         mix(sideToMove == .red ? 201 : 202)
-        switch castleWinPending {
-        case .none:        mix(210)
-        case .some(.red):  mix(211)
-        case .some(.black): mix(212)
-        }
         return h
     }
 
@@ -223,10 +216,15 @@ struct Board {
 
     // MARK: Apply
     //
-    // Returns the board after `move`. Mirrors the win-condition ordering exactly:
-    // king-capture → castle-pending bookkeeping → fort control → switch turn →
-    // resolve a pending castle hold. The side to move is ALWAYS switched at the
-    // end (even on a terminal move) so the negamax sign convention stays valid.
+    // Returns the board after `move`. Win conditions:
+    //   • King capture decides the game immediately for the mover.
+    //   • Castle hold and fort control must SURVIVE to the claimant's next turn:
+    //     they are won at the *start* of that side's turn. So after applying the
+    //     move we switch sides and check whether the new side-to-move already
+    //     satisfies a condition — meaning they set it up last turn and it held
+    //     through the opponent's reply (who could capture the piece/king or
+    //     occupy/defend the fort). The side to move is always switched, even on
+    //     a terminal move, so the negamax sign convention stays valid.
 
     func applying(_ move: Move) -> Board {
         var b = self
@@ -236,11 +234,9 @@ struct Board {
         guard var mover = b.squares[fromIdx] else { return b }
         let moverSide = mover.side
 
-        if let captured = b.squares[toIdx] {
-            if captured.type == .king {
-                b.winner = moverSide
-                b.winReason = .kingCapture
-            }
+        if let captured = b.squares[toIdx], captured.type == .king {
+            b.winner = moverSide
+            b.winReason = .kingCapture
         }
 
         // Relocate the mover.
@@ -248,36 +244,38 @@ struct Board {
         b.squares[toIdx] = mover
         b.squares[fromIdx] = nil
 
-        if b.winner == nil {
-            // Castle-pending bookkeeping.
-            if mover.type == .king && move.to == .castle {
-                b.castleWinPending = moverSide
-            } else if b.castleWinPending == moverSide,
-                      b.kingPosition(of: moverSide) != .castle {
-                b.castleWinPending = nil
-            }
-
-            // Fort control.
-            if let fw = b.checkFortWin() {
-                b.winner = fw
-                b.winReason = .fort
-            }
-        }
-
-        // Always switch the side to move.
+        // Switch to the opponent — their turn now begins.
         b.sideToMove = moverSide.other
 
-        // Resolve a pending castle hold: the holder wins once it becomes their
-        // turn again with the king still on the castle.
-        if b.winner == nil,
-           let pending = b.castleWinPending,
-           pending == b.sideToMove,
-           b.kingPosition(of: pending) == .castle {
-            b.winner = pending
+        // A king capture already decided the game.
+        if b.winner != nil { return b }
+
+        // The side now to move wins if a castle/fort claim it created last turn
+        // has survived to this point.
+        let claimant = b.sideToMove
+        if b.kingPosition(of: claimant) == .castle {
+            b.winner = claimant
             b.winReason = .castle
+        } else if b.hasFortControl(claimant) {
+            b.winner = claimant
+            b.winReason = .fort
         }
 
         return b
+    }
+
+    /// True if `side` holds the opponent's fort: at least one of its pieces is in
+    /// the opponent's fort and the opponent has none of its own pieces there.
+    func hasFortControl(_ side: Side) -> Bool {
+        let opp = side.other
+        var inOpponentFort = false
+        var opponentDefends = false
+        for sq in squares {
+            guard let p = sq else { continue }
+            if p.side == side && Position.isFort(p.pos, for: opp) { inOpponentFort = true }
+            if p.side == opp  && Position.isFort(p.pos, for: opp) { opponentDefends = true }
+        }
+        return inOpponentFort && !opponentDefends
     }
 
     /// Chess-style notation for a move played from this position, e.g.
@@ -288,21 +286,6 @@ struct Board {
         let base = sym.isEmpty ? "\(move.from)" : "\(sym) \(move.from)"
         let capture = piece(at: move.to) != nil
         return base + (capture ? "×\(move.to)" : "-\(move.to)")
-    }
-
-    func checkFortWin() -> Side? {
-        for side in Side.allCases {
-            let opp = side.other
-            var sideInOppFort = false
-            var oppInOwnFort = false
-            for sq in squares {
-                guard let p = sq else { continue }
-                if p.side == side && Position.isFort(p.pos, for: opp) { sideInOppFort = true }
-                if p.side == opp  && Position.isFort(p.pos, for: opp) { oppInOwnFort = true }
-            }
-            if sideInOppFort && !oppInOwnFort { return side }
-        }
-        return nil
     }
 
     // MARK: Movement rules
@@ -529,14 +512,12 @@ struct Board {
             if occupied(c, r + dr) && occupied(c + dc, r) { continue }
             _ = add(c + dc, r + dr)
         }
+        // Knight moves cannot jump: blocked if the square one step toward the
+        // destination's longer axis (the "leg") is occupied — same as the Dwarf.
         for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
-            let wallBlocked: Bool
-            if abs(dc) > abs(dr) {
-                wallBlocked = occupied(c + dc/2, r) && occupied(c + dc/2, r + dr)
-            } else {
-                wallBlocked = occupied(c, r + dr/2) && occupied(c + dc, r + dr/2)
-            }
-            if wallBlocked { continue }
+            let legCol = c + (abs(dc) > abs(dr) ? dc / 2 : 0)
+            let legRow = r + (abs(dr) > abs(dc) ? dr / 2 : 0)
+            if occupied(legCol, legRow) { continue }
             _ = add(c + dc, r + dr)
         }
         return (moves, attacks)
@@ -1175,7 +1156,6 @@ class GameState: ObservableObject {
 extension Board: Equatable {
     static func == (l: Board, r: Board) -> Bool {
         guard l.sideToMove == r.sideToMove,
-              l.castleWinPending == r.castleWinPending,
               l.winner == r.winner else { return false }
         for i in 0..<l.squares.count {
             switch (l.squares[i], r.squares[i]) {

@@ -303,15 +303,15 @@ enum Engine {
             if p.side == opp && Position.isFort(p.pos, for: me)  { oppInMyFort += 1 }
         }
 
-        // Win condition 2 — king toward / on the castle.
+        // Win condition 2 — king toward / on the castle. A king already on the
+        // castle is a standing threat to win next turn (the search resolves
+        // whether the opponent can capture or dislodge it).
         if let k = myKing {
-            score += (k == .castle) ? 4000 : (5 - k.chebyshev(to: .castle)) * 6
+            score += (k == .castle) ? 5000 : (5 - k.chebyshev(to: .castle)) * 6
         }
         if let k = oppKing {
-            score -= (k == .castle) ? 4000 : (5 - k.chebyshev(to: .castle)) * 6
+            score -= (k == .castle) ? 5000 : (5 - k.chebyshev(to: .castle)) * 6
         }
-        if board.castleWinPending == me  { score += 8000 }
-        if board.castleWinPending == opp { score -= 8000 }
 
         // Win condition 3 — fort attack and defense.
         score += myInOppFort * 200

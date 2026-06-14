@@ -612,6 +612,9 @@ struct Board {
         place(.spearman,  .red, col: 4, row: 1)
         place(.bowman,    .red, col: 5, row: 1)
         place(.skjolding, .red, col: 6, row: 1)
+        place(.skjolding, .red, col: 3, row: 2)
+        place(.skjolding, .red, col: 4, row: 2)
+        place(.skjolding, .red, col: 5, row: 2)
 
         // Black (point-symmetric: col→8-col, row→8-row)
         place(.skjolding, .black, col: 7, row: 8)
@@ -626,6 +629,9 @@ struct Board {
         place(.spearman,  .black, col: 4, row: 7)
         place(.bowman,    .black, col: 3, row: 7)
         place(.skjolding, .black, col: 2, row: 7)
+        place(.skjolding, .black, col: 5, row: 6)
+        place(.skjolding, .black, col: 4, row: 6)
+        place(.skjolding, .black, col: 3, row: 6)
     }
 
     private mutating func setup11x11() {

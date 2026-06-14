@@ -384,17 +384,22 @@ struct Board {
     }
 
     // Knight-shape move (c,r) → (c+dc, r+dr) where {|dc|,|dr|} == {1,2}.
-    // The path crosses the middle file/rank, where exactly two squares lie in the
-    // way: the orthogonal step along the LONG axis, and the diagonal step toward
-    // the target. A straight line can thread through either one (grazing the other's
-    // corner), so the move is blocked only when BOTH are occupied.
+    // A straight line can thread from origin to target by one of two routes: "high"
+    // through A (the long-axis orthogonal square) or "low" through B (the diagonal
+    // square). Each route is pinched shut by a pair of diagonally adjacent pieces.
+    // The move is blocked if ANY of these three square-pairs is fully occupied:
+    //   • {A, B}  — the two middle squares (together fill the crossed file/rank)
+    //   • {A, C}  — pinch the origin-side corner (C = short-axis orthogonal step)
+    //   • {B, U}  — pinch the target-side corner (U = one square past A toward target)
     private func knightBlocked(_ c: Int, _ r: Int, _ dc: Int, _ dr: Int) -> Bool {
         let sc = dc > 0 ? 1 : -1
         let sr = dr > 0 ? 1 : -1
-        let diagC = c + sc, diagR = r + sr                 // diagonal intermediate
-        let longC = abs(dc) > abs(dr) ? c + sc : c         // long-axis orthogonal
-        let longR = abs(dc) > abs(dr) ? r      : r + sr    // intermediate
-        return occupied(longC, longR) && occupied(diagC, diagR)
+        let horiz = abs(dc) > abs(dr)
+        let a  = occupied(horiz ? c + sc   : c,      horiz ? r : r + sr)    // long-axis orthogonal
+        let b  = occupied(c + sc, r + sr)                                   // diagonal
+        let cc = occupied(horiz ? c        : c + sc, horiz ? r + sr : r)    // short-axis orthogonal
+        let u  = occupied(horiz ? c + 2*sc : c,      horiz ? r : r + 2*sr)  // one past A toward target
+        return (a && b) || (a && cc) || (b && u)
     }
 
     // Skjolding: 2 forward (if 1-forward clear), diagonal forward ×2, 1 backward.

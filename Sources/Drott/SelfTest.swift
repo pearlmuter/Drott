@@ -223,14 +223,15 @@ enum SelfTest {
               "engine captures the boxed-in Bowman (got \(best.map { b.notation(for: $0) } ?? "nil"))")
     }
 
-    // Knight-move blocking rule: a knight move crosses the middle file/rank, where
-    // two squares lie in the way — the orthogonal step along the long axis and the
-    // diagonal step toward the target. A line can thread through either one, so the
-    // move is blocked only when BOTH are occupied.
-    // At start: G1 Hunter → H3 (+1,+2) has G2 occupied but H2 empty → reachable.
-    //           G1 Hunter → I2 (+2,+1) has H1 occupied but H2 empty → reachable.
-    //           G1 Hunter → E2 (-2,+1) has F1 and F2 both occupied → blocked.
-    //           G1 Hunter → F3 (-1,+2) has G2 and F2 both occupied → blocked.
+    // Knight-move blocking rule: a knight move threads to its target by one of two
+    // routes, each pinched shut by a pair of diagonally adjacent pieces. The move is
+    // blocked if any of three square-pairs is fully occupied: the two middle squares,
+    // the origin-side corner pair, or the target-side corner pair.
+    // At the start the Hunter at G1 is fully boxed in — every knight target is pinched:
+    //   G1 → I2 (+2,+1): H1 and G2 pinch the origin corner → blocked.
+    //   G1 → H3 (+1,+2): G2 and H1 pinch the origin corner → blocked.
+    //   G1 → E2 (-2,+1): F1 and F2 are the two middle squares → blocked.
+    //   G1 → F3 (-1,+2): G2 and F2 are the two middle squares → blocked.
     private static func hunterBoxedIn() {
         print("[hunter boxed in]")
         let b = Board()   // 9×9 default
@@ -239,12 +240,13 @@ enum SelfTest {
         let (m, a) = b.validDestinations(for: hunter)
         let h3 = Position(col: 7, row: 2)
         let i2 = Position(col: 8, row: 1)
-        check(m.contains(h3) || a.contains(h3), "Hunter reaches H3 (one intermediate clear)")
-        check(m.contains(i2) || a.contains(i2), "Hunter reaches I2 (one intermediate clear)")
         let e2 = Position(col: 4, row: 1)
         let f3 = Position(col: 5, row: 2)
-        check(!m.contains(e2) && !a.contains(e2), "Hunter blocked from E2 (both intermediates occupied)")
-        check(!m.contains(f3) && !a.contains(f3), "Hunter blocked from F3 (both intermediates occupied)")
+        check(!m.contains(h3) && !a.contains(h3), "Hunter blocked from H3 (origin corner pinched)")
+        check(!m.contains(i2) && !a.contains(i2), "Hunter blocked from I2 (origin corner pinched)")
+        check(!m.contains(e2) && !a.contains(e2), "Hunter blocked from E2 (two middle squares occupied)")
+        check(!m.contains(f3) && !a.contains(f3), "Hunter blocked from F3 (two middle squares occupied)")
+        check(m.isEmpty && a.isEmpty, "Hunter is fully boxed in at the start")
     }
 
     // A Dwarf on A4 reaching C3 (+2,-1): the long-axis square B4 is empty while the
@@ -264,12 +266,35 @@ enum SelfTest {
         check(m.contains(c3) || a.contains(c3),
               "Dwarf reaches C3 with B4 empty though diagonal B3 is occupied")
 
-        // Now fill B4 too: both intermediates occupied → the move must be blocked.
+        // Now fill B4 too: both middle squares occupied → the move must be blocked.
         b.put(.skjolding, .red, Position(col: 1, row: 3))   // B4
         let dwarf2 = b.piece(at: Position(col: 0, row: 3))!
         let (m2, a2) = b.validDestinations(for: dwarf2)
         check(!m2.contains(c3) && !a2.contains(c3),
               "Dwarf blocked from C3 once both B3 and B4 are occupied")
+
+        // Corner-pinch (the "diagonal rule"): Dwarf F2 → H1 (+2,-1). The diagonal
+        // square G1 is empty, but the origin-side corner is pinched shut by F1 and
+        // G2 (diagonally adjacent, both occupied) → the move is blocked.
+        var p = Board.empty()
+        p.put(.king, .red, Position(col: 8, row: 8))
+        p.put(.king, .black, Position(col: 0, row: 8))
+        p.put(.dwarf,     .red, Position(col: 5, row: 1))   // F2
+        p.put(.skjolding, .red, Position(col: 5, row: 0))   // F1 (short-axis orthogonal)
+        p.put(.skjolding, .red, Position(col: 6, row: 1))   // G2 (long-axis orthogonal)
+        p.sideToMove = .red                                  // G1 left empty
+        let dwarf3 = p.piece(at: Position(col: 5, row: 1))!
+        let (m3, a3) = p.validDestinations(for: dwarf3)
+        let h1 = Position(col: 7, row: 0)
+        check(!m3.contains(h1) && !a3.contains(h1),
+              "Dwarf blocked from H1: F1 and G2 pinch the corner though G1 is empty")
+
+        // Clearing F1 reopens the low route through the empty G1 → move legal again.
+        p.squares[p.index(Position(col: 5, row: 0))] = nil   // remove F1
+        let dwarf4 = p.piece(at: Position(col: 5, row: 1))!
+        let (m4, a4) = p.validDestinations(for: dwarf4)
+        check(m4.contains(h1) || a4.contains(h1),
+              "Dwarf reaches H1 once F1 is cleared (corner no longer pinched)")
     }
 
     // A position seen three times is a draw. Two kings shuffle a 4-ply cycle

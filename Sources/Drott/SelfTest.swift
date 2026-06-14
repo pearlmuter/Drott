@@ -45,6 +45,7 @@ enum SelfTest {
         castleHold()
         fortTiming()
         hunterBoxedIn()
+        dwarfKnightLineOfSight()
         freeCapture()
         threefold()
         repetitionAwareEngine()
@@ -222,19 +223,53 @@ enum SelfTest {
               "engine captures the boxed-in Bowman (got \(best.map { b.notation(for: $0) } ?? "nil"))")
     }
 
-    // The Hunter cannot jump: at the start it is boxed in by its own pieces and
-    // must not leap out between the Skjoldings.
+    // Knight-move blocking rule: a knight move crosses the middle file/rank, where
+    // two squares lie in the way — the orthogonal step along the long axis and the
+    // diagonal step toward the target. A line can thread through either one, so the
+    // move is blocked only when BOTH are occupied.
+    // At start: G1 Hunter → H3 (+1,+2) has G2 occupied but H2 empty → reachable.
+    //           G1 Hunter → I2 (+2,+1) has H1 occupied but H2 empty → reachable.
+    //           G1 Hunter → E2 (-2,+1) has F1 and F2 both occupied → blocked.
+    //           G1 Hunter → F3 (-1,+2) has G2 and F2 both occupied → blocked.
     private static func hunterBoxedIn() {
         print("[hunter boxed in]")
         let b = Board()   // 9×9 default
-        let hunter = b.piece(at: Position(col: 6, row: 0))!   // red Hunter at G1 in 9×9
+        let hunter = b.piece(at: Position(col: 6, row: 0))!   // red Hunter at G1
         check(hunter.type == .hunter, "found the Hunter at G1")
         let (m, a) = b.validDestinations(for: hunter)
-        let h3 = Position(col: 7, row: 2)   // would require leaping over H1/G2
-        let i2 = Position(col: 8, row: 1)   // would require leaping over H1
-        check(!m.contains(h3) && !a.contains(h3), "Hunter does not leap to H3 at the start")
-        check(!m.contains(i2) && !a.contains(i2), "Hunter does not leap to I2 at the start")
-        check(m.isEmpty && a.isEmpty, "Hunter is fully boxed in at the start")
+        let h3 = Position(col: 7, row: 2)
+        let i2 = Position(col: 8, row: 1)
+        check(m.contains(h3) || a.contains(h3), "Hunter reaches H3 (one intermediate clear)")
+        check(m.contains(i2) || a.contains(i2), "Hunter reaches I2 (one intermediate clear)")
+        let e2 = Position(col: 4, row: 1)
+        let f3 = Position(col: 5, row: 2)
+        check(!m.contains(e2) && !a.contains(e2), "Hunter blocked from E2 (both intermediates occupied)")
+        check(!m.contains(f3) && !a.contains(f3), "Hunter blocked from F3 (both intermediates occupied)")
+    }
+
+    // A Dwarf on A4 reaching C3 (+2,-1): the long-axis square B4 is empty while the
+    // diagonal square B3 is occupied. A line threads high through B4, so the move is
+    // legal — a single occupied diagonal does NOT block on its own.
+    private static func dwarfKnightLineOfSight() {
+        print("[dwarf knight line of sight]")
+        var b = Board.empty()
+        b.put(.king, .red, Position(col: 8, row: 8))
+        b.put(.king, .black, Position(col: 0, row: 8))
+        b.put(.dwarf,     .red, Position(col: 0, row: 3))   // A4
+        b.put(.skjolding, .red, Position(col: 1, row: 2))   // B3 (diagonal, occupied)
+        b.sideToMove = .red                                  // B4 left empty
+        let dwarf = b.piece(at: Position(col: 0, row: 3))!
+        let (m, a) = b.validDestinations(for: dwarf)
+        let c3 = Position(col: 2, row: 2)
+        check(m.contains(c3) || a.contains(c3),
+              "Dwarf reaches C3 with B4 empty though diagonal B3 is occupied")
+
+        // Now fill B4 too: both intermediates occupied → the move must be blocked.
+        b.put(.skjolding, .red, Position(col: 1, row: 3))   // B4
+        let dwarf2 = b.piece(at: Position(col: 0, row: 3))!
+        let (m2, a2) = b.validDestinations(for: dwarf2)
+        check(!m2.contains(c3) && !a2.contains(c3),
+              "Dwarf blocked from C3 once both B3 and B4 are occupied")
     }
 
     // A position seen three times is a draw. Two kings shuffle a 4-ply cycle

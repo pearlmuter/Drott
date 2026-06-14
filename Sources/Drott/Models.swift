@@ -4,7 +4,7 @@ import CoreGraphics
 
 /// On-screen size of one board square, in points. Updated by GameState when
 /// board size changes; shared by views and drag hit-testing.
-var SQ: CGFloat = 60
+var SQ: CGFloat = 66   // updated by GameState; both sizes target 594px (9×66 = 11×54)
 
 // MARK: - Board size
 
@@ -13,7 +13,7 @@ enum BoardSize: String, CaseIterable, Identifiable {
     case eleven = "11×11"
     var id: String { rawValue }
     var N: Int { self == .nine ? 9 : 11 }
-    var squareSize: CGFloat { self == .nine ? 60 : 54 }
+    var squareSize: CGFloat { self == .nine ? 66 : 54 }   // both → 594px board (9×66 = 11×54)
 }
 
 // MARK: - Position
@@ -199,6 +199,13 @@ struct Board {
     func isFort(_ p: Position, for s: Side) -> Bool { s == .red ? isRedFort(p) : isBlackFort(p) }
     func isCastleZone(_ p: Position) -> Bool { Position.isCastleZone(p, N: N) }
 
+    var pieceCount: (red: Int, black: Int) {
+        squares.reduce(into: (0, 0)) { acc, s in
+            guard let p = s else { return }
+            if p.side == .red { acc.0 += 1 } else { acc.1 += 1 }
+        }
+    }
+
     // MARK: Access
 
     @inline(__always) func index(_ col: Int, _ row: Int) -> Int { col + row * N }
@@ -376,6 +383,20 @@ struct Board {
         return squares[index(col, row)] != nil
     }
 
+    // Knight-shape move (c,r) → (c+dc, r+dr) where {|dc|,|dr|} == {1,2}.
+    // The path crosses the middle file/rank, where exactly two squares lie in the
+    // way: the orthogonal step along the LONG axis, and the diagonal step toward
+    // the target. A straight line can thread through either one (grazing the other's
+    // corner), so the move is blocked only when BOTH are occupied.
+    private func knightBlocked(_ c: Int, _ r: Int, _ dc: Int, _ dr: Int) -> Bool {
+        let sc = dc > 0 ? 1 : -1
+        let sr = dr > 0 ? 1 : -1
+        let diagC = c + sc, diagR = r + sr                 // diagonal intermediate
+        let longC = abs(dc) > abs(dr) ? c + sc : c         // long-axis orthogonal
+        let longR = abs(dc) > abs(dr) ? r      : r + sr    // intermediate
+        return occupied(longC, longR) && occupied(diagC, diagR)
+    }
+
     // Skjolding: 2 forward (if 1-forward clear), diagonal forward ×2, 1 backward.
     // Shieldwall: diagonal blocked when both adjacent orthogonals occupied (any piece).
     private func skjoldingMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
@@ -523,9 +544,7 @@ struct Board {
             _ = add(c + dc*2, r + dr*2)
         }
         for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
-            let transitCol = c + (abs(dc) > abs(dr) ? dc/2 : 0)
-            let transitRow = r + (abs(dr) > abs(dc) ? dr/2 : 0)
-            if occupied(transitCol, transitRow) { continue }
+            if knightBlocked(c, r, dc, dr) { continue }
             _ = add(c + dc, r + dr)
         }
     }
@@ -548,12 +567,8 @@ struct Board {
             if occupied(c, r + dr) && occupied(c + dc, r) { continue }
             add(c + dc, r + dr)
         }
-        // Knight moves cannot jump: blocked if the square one step toward the
-        // destination's longer axis (the "leg") is occupied — same as the Dwarf.
         for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {
-            let legCol = c + (abs(dc) > abs(dr) ? dc / 2 : 0)
-            let legRow = r + (abs(dr) > abs(dc) ? dr / 2 : 0)
-            if occupied(legCol, legRow) { continue }
+            if knightBlocked(c, r, dc, dr) { continue }
             add(c + dc, r + dr)
         }
     }
@@ -730,6 +745,7 @@ class GameState: ObservableObject {
     // Background analysis of the *viewed* position, for the eval bar / read-out.
     @Published var evalEnabled = true
     @Published var evalRed: Int? = nil          // score from Red's perspective
+    @Published var lineHighlight: (from: Position, to: Position)? = nil
     @Published var analysis: SearchResult? = nil
     @Published var analysisTurn: Side = .red    // side to move in the analysed pos
     private var analysisGen = 0
@@ -758,6 +774,13 @@ class GameState: ObservableObject {
 
     /// Convenience: board dimension for the current game.
     var boardN: Int { liveBoard.N }
+
+    /// Pieces captured by each side (compared to the starting position).
+    var capturedCounts: (byRed: Int, byBlack: Int) {
+        let initial = Board(size: boardSize).pieceCount
+        let current = liveBoard.pieceCount
+        return (byRed: initial.black - current.black, byBlack: initial.red - current.red)
+    }
 
     /// Display helpers read the *viewed* board so scrubbing reflects the past.
     var turn: Side          { viewedBoard.sideToMove }
@@ -841,6 +864,7 @@ class GameState: ObservableObject {
         selected = nil
         highlightMoves = []
         highlightAttacks = []
+        lineHighlight = nil
         cancelDeepAnalysis()
         graphScores = [nil]            // one slot for the opening position
         showGraph = false
@@ -860,6 +884,7 @@ class GameState: ObservableObject {
         viewIndex = 0
         record = []
         graphScores = [nil]
+        lineHighlight = nil
         clearSelection()
         scheduleAnalysis()
     }

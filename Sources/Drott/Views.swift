@@ -107,13 +107,14 @@ private enum SideTab { case game, rules }
 struct SidePanel: View {
     @ObservedObject var game: GameState
     @State private var tab: SideTab = .game
+    @State private var legendExpanded: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
 
             statusCard
 
-            // Settings are only shown while setting up a new game.
+            // Settings + Start Game only during setup.
             if game.phase == .setup {
                 settingsCard
             }
@@ -159,43 +160,71 @@ struct SidePanel: View {
 
             Spacer()
 
-            phaseButtons
+            // Phase action buttons — not shown in setup (Start Game is inside settingsCard).
+            if game.phase != .setup {
+                phaseButtons
+            }
         }
     }
 
     // Turn / result, plus any transient status note.
     private var statusCard: some View {
         infoCard {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
                     if game.isDrawShown {
-                        Circle().fill(Color.secondary).frame(width: 13, height: 13)
-                        VStack(alignment: .leading, spacing: 1) {
-                            fieldLabel("RESULT")
-                            Text("Draw").font(.title3.weight(.semibold))
-                        }
+                        pillBadge("Draw", color: .secondary)
+                        Text("agreed").font(.system(size: 12)).foregroundStyle(.secondary)
                     } else {
                         let side = game.displayWinner ?? game.turn
-                        Circle()
-                            .fill(side == .red ? Color.red : Color.primary)
-                            .frame(width: 13, height: 13)
-                        VStack(alignment: .leading, spacing: 1) {
-                            fieldLabel(game.displayWinner != nil ? "WINNER" : "TURN")
-                            Text(side.rawValue).font(.title3.weight(.semibold))
-                        }
+                        let label = game.displayWinner != nil ? "WINNER" : "TURN"
+                        pillBadge(side.rawValue, color: side == .red ? Color(red:0.75,green:0.13,blue:0.11) : Color(red:0.14,green:0.14,blue:0.18))
+                        Text(label == "WINNER" ? "wins" : "to move")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if game.thinking {
-                        HStack(spacing: 5) {
-                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                        HStack(spacing: 4) {
+                            ProgressView().scaleEffect(0.55).frame(width: 12, height: 12)
                             Text("thinking…").font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                     }
                 }
+
+                // Captured piece tally — only meaningful once game starts.
+                if game.phase != .setup {
+                    let caps = game.capturedCounts
+                    HStack(spacing: 14) {
+                        capturedLabel(side: "Red",   taken: caps.byBlack)
+                        capturedLabel(side: "Black", taken: caps.byRed)
+                    }
+                }
+
                 if let msg = game.statusMessage {
                     Text(msg).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private func pillBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(color))
+    }
+
+    private func capturedLabel(side: String, taken: Int) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(side == "Red" ? Color(red:0.75,green:0.13,blue:0.11) : Color(red:0.14,green:0.14,blue:0.18))
+                .frame(width: 7, height: 7)
+            Text(side).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text("−\(taken)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(taken > 0 ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
         }
     }
 
@@ -251,18 +280,22 @@ struct SidePanel: View {
                     }
                     .pickerStyle(.segmented)
                 }
+
+                Divider().padding(.vertical, 2)
+
+                Button("Start Game") { game.startGame() }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
             }
         }
     }
 
-    // Primary action button(s) per phase.
+    // Primary action button(s) per phase (setup is handled inside settingsCard).
     @ViewBuilder
     private var phaseButtons: some View {
         switch game.phase {
         case .setup:
-            Button("Start Game") { game.startGame() }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
+            EmptyView()
         case .playing:
             Button("New Game") { game.reset() }
                 .frame(maxWidth: .infinity)
@@ -345,13 +378,26 @@ struct SidePanel: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.mini)
+                        .disabled(game.phase == .setup)
                 }
 
-                if game.evalEnabled {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if game.phase == .setup {
+                    Text("Available once game starts")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                } else if game.evalEnabled {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        // Directional arrow — colour carries the Red/Black signal
+                        if let s = game.evalRed, !game.isDrawShown {
+                            let decisive = Engine.mate - Engine.maxDepth
+                            if s < decisive && s > -decisive {
+                                Image(systemName: s >= 0 ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(s >= 0 ? Color(red:0.75,green:0.13,blue:0.11) : Color.primary)
+                            }
+                        }
                         Text(evalText)
                             .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(evalColor)
+                            .foregroundStyle(Color.primary)   // always neutral — arrow carries the colour
                         if let a = game.analysis {
                             Text("depth \(a.depth)")
                                 .font(.system(size: 10, design: .monospaced))
@@ -385,13 +431,9 @@ struct SidePanel: View {
         return String(format: "%+.1f", Double(s) / 100.0)
     }
 
-    private var evalColor: Color {
-        guard game.evalEnabled, let s = game.evalRed else { return .secondary }
-        return s >= 0 ? .red : .primary
-    }
-
     private func lineRow(_ tag: String, move: Move, score: Int) -> some View {
-        HStack(spacing: 6) {
+        let isHighlighted = game.lineHighlight.map { $0.from == move.from && $0.to == move.to } ?? false
+        return HStack(spacing: 6) {
             Text(tag)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -402,6 +444,16 @@ struct SidePanel: View {
             Text(scoreText(score))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 5)
+        .background(isHighlighted ? Color.accentColor.opacity(0.18) : Color.clear)
+        .cornerRadius(5)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            let hl = (from: move.from, to: move.to)
+            let same = game.lineHighlight.map { $0.from == move.from && $0.to == move.to } ?? false
+            game.lineHighlight = same ? nil : hl
         }
     }
 
@@ -418,27 +470,35 @@ struct SidePanel: View {
         VStack(alignment: .leading, spacing: 10) {
             analysisCard
 
-            // Legend
+            // Collapsible legend
             infoCard {
-                VStack(alignment: .leading, spacing: 3) {
-                    fieldLabel("PIECES")
-                    ForEach(PieceType.allCases) { pt in
-                        HStack(spacing: 6) {
-                            Text(pt.symbol)
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .frame(width: 22, alignment: .leading)
-                            Text(pt.fullName).font(.system(size: 11))
+                DisclosureGroup(isExpanded: $legendExpanded) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        fieldLabel("PIECES")
+                        ForEach(PieceType.allCases) { pt in
+                            HStack(spacing: 6) {
+                                Text(pt.symbol)
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .frame(width: 22, alignment: .leading)
+                                Text(pt.fullName).font(.system(size: 11))
+                            }
                         }
+                        Divider().padding(.vertical, 2)
+                        fieldLabel("BOARD")
+                        legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85),
+                                  label: "Castle (\(game.liveBoard.castle.description))")
+                        legendRow(color: Color(red: 0.86, green: 0.80, blue: 0.69), label: "Fort area")
+                        legendRow(color: Color(red: 0.94, green: 0.90, blue: 0.81), label: "Castle zone")
+                        legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.30).opacity(0.45), label: "Last move")
+                        legendRow(color: .green.opacity(0.45), label: "Valid move")
+                        legendRow(color: .orange.opacity(0.75), label: "Can attack")
+                        legendRow(color: Color.blue.opacity(0.25), label: "Engine line")
                     }
-                    Divider().padding(.vertical, 2)
-                    fieldLabel("BOARD")
-                    legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.2).opacity(0.85),
-                              label: "Castle (\(game.liveBoard.castle.description))")
-                    legendRow(color: Color(red: 0.86, green: 0.80, blue: 0.69), label: "Fort area")
-                    legendRow(color: Color(red: 0.94, green: 0.90, blue: 0.81), label: "Castle zone")
-                    legendRow(color: Color(red: 1.0, green: 0.85, blue: 0.30).opacity(0.45), label: "Last move")
-                    legendRow(color: .green.opacity(0.45), label: "Valid move")
-                    legendRow(color: .orange.opacity(0.75), label: "Can attack")
+                    .padding(.top, 6)
+                } label: {
+                    Text("LEGEND")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -446,20 +506,28 @@ struct SidePanel: View {
             infoCard {
                 VStack(alignment: .leading, spacing: 4) {
                     fieldLabel("MOVES")
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 1) {
-                                ForEach(Array(game.record.enumerated()), id: \.element.id) { idx, entry in
-                                    moveRow(idx: idx, entry: entry)
-                                        .id(idx)
+                    if game.record.isEmpty {
+                        Text("No moves yet")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 10)
+                    } else {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    ForEach(Array(game.record.enumerated()), id: \.element.id) { idx, entry in
+                                        moveRow(idx: idx, entry: entry)
+                                            .id(idx)
+                                    }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(maxHeight: 150)
-                        .onChange(of: game.viewIndex) { _ in
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                proxy.scrollTo(game.viewIndex - 1, anchor: .center)
+                            .frame(maxHeight: 150)
+                            .onChange(of: game.viewIndex) { _ in
+                                withAnimation(.easeOut(duration: 0.15)) {
+                                    proxy.scrollTo(game.viewIndex - 1, anchor: .center)
+                                }
                             }
                         }
                     }
@@ -604,18 +672,17 @@ struct BoardView: View {
     private var gridSize: CGFloat { SQ * CGFloat(game.boardN) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            EvalBar(redScore: game.evalRed, height: gridSize)
+        HStack(alignment: .top, spacing: 6) {
 
-            // Row labels  N…1
+            // Row labels  N…1  (spacer at bottom matches eval-bar + column-label height)
             VStack(spacing: 0) {
                 ForEach((0..<game.boardN).reversed(), id: \.self) { row in
                     Text("\(row + 1)")
-                        .frame(width: 22, height: SQ)
+                        .frame(width: 20, height: SQ)
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.primary.opacity(0.45))
                 }
-                Color.clear.frame(width: 22, height: 26)
+                Color.clear.frame(width: 20, height: 38)   // 4pt gap + 8pt bar + 26pt col labels
             }
 
             VStack(spacing: 0) {
@@ -627,13 +694,17 @@ struct BoardView: View {
                 .background(Color(red: 0.16, green: 0.16, blue: 0.18))
                 .cornerRadius(4)
 
+                // Horizontal eval bar below the grid
+                EvalBar(redScore: game.evalRed, width: gridSize)
+                    .padding(.top, 4)
+
                 // Column labels  A…I / A…K
                 HStack(spacing: 0) {
                     ForEach(0..<game.boardN, id: \.self) { col in
                         Text(String(UnicodeScalar(65 + col)!))
                             .frame(width: SQ, height: 26)
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.primary.opacity(0.45))
                     }
                 }
             }
@@ -647,6 +718,7 @@ struct BoardView: View {
         let castlePos = board.castle
         let redFort = board.redFortSquares
         let blackFort = board.blackFortSquares
+        let lineHL = game.lineHighlight
         return VStack(spacing: 0) {
             ForEach((0..<n).reversed(), id: \.self) { row in
                 HStack(spacing: 0) {
@@ -662,7 +734,8 @@ struct BoardView: View {
                             isLastMove:     last.map { $0.from == pos || $0.to == pos } ?? false,
                             isOnCastle:     pos == castlePos,
                             isInCastleZone: Position.isCastleZone(pos, N: n),
-                            isOnFort:       redFort.contains(pos) || blackFort.contains(pos)
+                            isOnFort:       redFort.contains(pos) || blackFort.contains(pos),
+                            isLineHighlight: lineHL.map { $0.from == pos || $0.to == pos } ?? false
                         )
                         .onTapGesture { game.tap(pos) }
                         .gesture(
@@ -695,13 +768,12 @@ struct BoardView: View {
 
 // MARK: - Evaluation bar
 //
-// A chess-style vertical bar: Red advantage fills from the bottom (Red plays
-// up from the bottom of the board), Black from the top. The numeric read-out is
-// in "pawns" (eval / 100), where piece value is mobility.
+// Horizontal bar below the board: Red fills from the left, Black from the right.
+// Red at 50 % = balanced; 100 % = decisive Red advantage.
 
 struct EvalBar: View {
     let redScore: Int?      // Red perspective; positive = Red ahead
-    let height: CGFloat
+    let width: CGFloat
 
     private var decisive: Int { Engine.mate - Engine.maxDepth }
 
@@ -712,28 +784,15 @@ struct EvalBar: View {
         return CGFloat(1.0 / (1.0 + exp(-Double(s) / 150.0)))
     }
 
-    private var label: String {
-        guard let s = redScore else { return "–" }
-        if s >=  decisive { return "R#" }
-        if s <= -decisive { return "B#" }
-        return String(format: "%+.1f", Double(s) / 100.0)
-    }
-
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Rectangle().fill(Color(red: 0.12, green: 0.12, blue: 0.14))          // Black
-            Rectangle().fill(Color(red: 0.80, green: 0.20, blue: 0.18))          // Red
-                .frame(height: max(0, min(height, height * fraction)))
+        ZStack(alignment: .leading) {
+            Rectangle().fill(Color(red: 0.15, green: 0.15, blue: 0.18))           // Black (right)
+            Rectangle().fill(Color(red: 0.78, green: 0.18, blue: 0.16))           // Red (left)
+                .frame(width: max(0, min(width, width * fraction)))
         }
-        .frame(width: 18, height: height)
+        .frame(width: width, height: 8)
         .clipShape(RoundedRectangle(cornerRadius: 4))
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.25), lineWidth: 0.5))
-        .overlay(alignment: redScore.map { $0 >= 0 } ?? true ? .bottom : .top) {
-            Text(label)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundColor(.white)
-                .padding(.vertical, 3)
-        }
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.20), lineWidth: 0.5))
     }
 }
 
@@ -850,6 +909,7 @@ struct SquareView: View {
     var isOnCastle: Bool = false
     var isInCastleZone: Bool = false
     var isOnFort: Bool = false
+    var isLineHighlight: Bool = false
 
     private static let normalBeige  = Color(red: 0.94, green: 0.90, blue: 0.81)
     private static let fortBeige    = Color(red: 0.86, green: 0.80, blue: 0.69)
@@ -887,6 +947,12 @@ struct SquareView: View {
                         .fill(Color(red: 1.0, green: 0.85, blue: 0.30).opacity(0.45))
                 }
 
+                // Engine line highlight: soft blue tint.
+                if isLineHighlight && !isSelected {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.blue.opacity(0.22))
+                }
+
                 // Selection tint
                 if isSelected {
                     RoundedRectangle(cornerRadius: 5)
@@ -904,6 +970,8 @@ struct SquareView: View {
                 // a floating copy is rendered by the board instead.
                 if let p = piece, !isDragOrigin {
                     PieceToken(piece: p)
+                        .scaleEffect(isSelected ? 1.10 : 1.0)
+                        .animation(.spring(response: 0.18, dampingFraction: 0.55), value: isSelected)
                 } else if piece == nil && !isMoveTarget {
                     VStack {
                         Spacer()
@@ -942,7 +1010,7 @@ struct SquareView: View {
                 while y < size.height {
                     let rect = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
                     ctx.fill(Path(ellipseIn: rect),
-                             with: .color(Self.textureBrown.opacity(0.20)))
+                             with: .color(Self.textureBrown.opacity(0.33)))
                     y += spacing
                 }
                 x += spacing
@@ -960,8 +1028,8 @@ struct SquareView: View {
                 path.move(to: CGPoint(x: offset, y: 0))
                 path.addLine(to: CGPoint(x: offset + size.height, y: size.height))
                 ctx.stroke(path,
-                           with: .color(Self.textureBrown.opacity(0.16)),
-                           lineWidth: 0.7)
+                           with: .color(Self.textureBrown.opacity(0.28)),
+                           lineWidth: 0.8)
                 offset += spacing
             }
         }
@@ -973,28 +1041,48 @@ struct SquareView: View {
 struct PieceToken: View {
     let piece: Piece
 
-    private var resourceName: String {
-        let side = piece.side.rawValue.lowercased()
-        let name = piece.type == .skjolding ? "pawn" : piece.type.rawValue
-        return "\(side)_\(name)"
+    // Red: deep carmine; Black: deep navy-slate.
+    private var iconColor: NSColor {
+        piece.side == .red
+            ? NSColor(red: 0.75, green: 0.11, blue: 0.09, alpha: 1)
+            : NSColor(red: 0.10, green: 0.11, blue: 0.22, alpha: 1)
+    }
+    private var circleColor: Color {
+        piece.side == .red
+            ? Color(red: 1.00, green: 0.97, blue: 0.96)
+            : Color(red: 0.96, green: 0.96, blue: 0.99)
     }
 
     private var nsImage: NSImage? {
+        let name = piece.type.rawValue   // "wolf", "king", "skjolding", etc.
+        func load(from url: URL) -> NSImage? {
+            guard let raw = NSImage(contentsOf: url) else { return nil }
+            // Paint the silhouette with the side colour using sourceAtop compositing.
+            let size = raw.size
+            let tinted = NSImage(size: size, flipped: false) { rect in
+                raw.draw(in: rect)
+                self.iconColor.set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+            return tinted
+        }
+        if let url = Bundle.module.url(forResource: name, withExtension: "svg") {
+            if let img = load(from: url) { return img }
+        }
         if let resURL = Bundle.main.resourceURL {
             let url = resURL
                 .appendingPathComponent("Drott_Drott.bundle")
-                .appendingPathComponent("\(resourceName).png")
-            if let img = NSImage(contentsOf: url) { return img }
+                .appendingPathComponent("\(name).svg")
+            if let img = load(from: url) { return img }
         }
-        if let url = Bundle.module.url(forResource: resourceName, withExtension: "png"),
-           let img = NSImage(contentsOf: url) { return img }
         return nil
     }
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.white)
+                .fill(circleColor)
                 .shadow(color: .black.opacity(0.30), radius: 2, x: 0, y: 1)
                 .frame(width: SQ * 0.88, height: SQ * 0.88)
 

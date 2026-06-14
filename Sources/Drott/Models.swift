@@ -77,6 +77,21 @@ enum PieceType: String, CaseIterable, Identifiable {
         }
     }
     var fullName: String { rawValue.capitalized }
+
+    /// Compact 1…9 code used for fast position hashing.
+    var code: UInt8 {
+        switch self {
+        case .king:      return 1
+        case .berserker: return 2
+        case .spearman:  return 3
+        case .bowman:    return 4
+        case .elf:       return 5
+        case .wolf:      return 6
+        case .dwarf:     return 7
+        case .hunter:    return 8
+        case .skjolding: return 9
+        }
+    }
 }
 
 struct Piece: Identifiable, Equatable {
@@ -152,6 +167,24 @@ struct Board {
     func piece(at pos: Position) -> Piece? {
         guard Position.valid(col: pos.col, row: pos.row) else { return nil }
         return squares[index(pos)]
+    }
+
+    /// A deterministic 64-bit key identifying this position for repetition
+    /// detection: occupancy (type+side) + side to move + castle-pending state.
+    /// FNV-1a so it does not depend on Swift's per-run hash seed.
+    var repetitionKey: UInt64 {
+        var h: UInt64 = 14695981039346656037
+        @inline(__always) func mix(_ b: UInt8) { h = (h ^ UInt64(b)) &* 1099511628211 }
+        for sq in squares {
+            if let p = sq { mix((p.side == .red ? 0 : 100) + p.type.code) } else { mix(0) }
+        }
+        mix(sideToMove == .red ? 201 : 202)
+        switch castleWinPending {
+        case .none:        mix(210)
+        case .some(.red):  mix(211)
+        case .some(.black): mix(212)
+        }
+        return h
     }
 
     var pieces: [Piece] { squares.compactMap { $0 } }
@@ -626,6 +659,17 @@ class GameState: ObservableObject {
     private let analysisQueue = DispatchQueue(label: "drott.analysis", qos: .userInitiated)
     private let analysisTime = 0.3
 
+    // Deep post-game analysis: Red-perspective eval per ply (nil = not computed
+    // yet), for the evaluation graph. Runs the engine longer, capped at depth 22.
+    @Published var graphScores: [Int?] = []
+    @Published var deepAnalyzing = false
+    @Published var deepProgress = 0             // positions analysed so far
+    @Published var deepTotal = 0
+    @Published var deepTimePerMove: Double = 2.0
+    private var deepGen = 0
+    private let deepQueue = DispatchQueue(label: "drott.deepanalysis", qos: .userInitiated)
+    static let analysisDepthCap = 22
+
     /// The live game position (where new moves are appended).
     var liveBoard: Board { history[history.count - 1] }
     /// The position currently displayed (may be in the past while scrubbing).
@@ -671,12 +715,19 @@ class GameState: ObservableObject {
         selected = nil
         highlightMoves = []
         highlightAttacks = []
+        clearGameGraph()
+        scheduleAnalysis()
+        // Note: does not auto-start. Use startGame() to begin with the options.
+    }
+
+    /// Reset to a fresh game and begin play with the chosen options.
+    func startGame() {
+        reset()
         if opponent == .selfPlay {
             play()
         } else {
-            maybeScheduleReply()
+            maybeScheduleReply()   // computer opens if it controls the first move
         }
-        scheduleAnalysis()
     }
 
     func piece(at pos: Position) -> Piece? { viewedBoard.piece(at: pos) }
@@ -782,8 +833,9 @@ class GameState: ObservableObject {
 
         let gen = analysisGen
         let budget = analysisTime
+        let past = Array(history.prefix(viewIndex + 1))   // positions up to the view
         analysisQueue.async { [weak self] in
-            let result = Engine.search(board, timeLimit: budget)
+            let result = Engine.search(board, history: past, timeLimit: budget)
             DispatchQueue.main.async {
                 guard let self, self.analysisGen == gen else { return }
                 self.analysis = result
@@ -793,20 +845,78 @@ class GameState: ObservableObject {
         }
     }
 
+    // MARK: Deep post-game analysis (the eval graph)
+
+    /// Run the engine over every position in the game (longer budget, depth ≤22)
+    /// and fill `graphScores` incrementally for the evaluation graph.
+    func analyzeGame() {
+        deepGen += 1
+        let gen = deepGen
+        let boards = history
+        let n = boards.count
+        let drawAt = drawPly
+        let budget = deepTimePerMove
+
+        graphScores = Array(repeating: nil, count: n)
+        deepProgress = 0
+        deepTotal = n
+        deepAnalyzing = true
+
+        deepQueue.async { [weak self] in
+            for i in 0..<n {
+                // Cancellation check, race-free, without retaining self across
+                // the long search below.
+                var stillCurrent = false
+                DispatchQueue.main.sync { stillCurrent = (self?.deepGen == gen) }
+                guard stillCurrent else { return }
+
+                let board = boards[i]
+                let red: Int
+                if let w = board.winner {
+                    red = (w == .red) ? Engine.mate : -Engine.mate
+                } else if drawAt == i {
+                    red = 0
+                } else {
+                    let prefix = Array(boards.prefix(i + 1))
+                    let r = Engine.search(board, history: prefix, timeLimit: budget,
+                                          depthLimit: GameState.analysisDepthCap)
+                    red = (board.sideToMove == .red) ? r.score : -r.score
+                }
+
+                DispatchQueue.main.async {
+                    guard let self, self.deepGen == gen else { return }
+                    if i < self.graphScores.count { self.graphScores[i] = red }
+                    self.deepProgress = i + 1
+                    if i == n - 1 { self.deepAnalyzing = false }
+                }
+            }
+        }
+    }
+
+    func cancelAnalysis() {
+        deepGen += 1
+        deepAnalyzing = false
+    }
+
+    /// Discard graph data (called when the game changes underneath it).
+    private func clearGameGraph() {
+        deepGen += 1
+        deepAnalyzing = false
+        deepProgress = 0
+        deepTotal = 0
+        graphScores = []
+    }
+
     // MARK: Mode
 
+    /// Choose who controls each side. Does NOT start play — the user presses
+    /// "Start Game" once the options are set.
     func setOpponent(_ mode: OpponentMode) {
         opponent = mode
+        isPlaying = false
         selected = nil
         highlightMoves = []
         highlightAttacks = []
-        if mode == .selfPlay {
-            play()                 // start watching immediately
-        } else {
-            isPlaying = false
-            jumpToLatest()
-            maybeScheduleReply()   // single reply if it's now the computer's turn
-        }
     }
 
     private enum Controller { case human, computer }
@@ -916,6 +1026,7 @@ class GameState: ObservableObject {
         history.append(newBoard)
         record.append(MoveRecord(move: move, notation: notation, side: mover.side,
                                  reason: newBoard.winReason))
+        clearGameGraph()   // a new move invalidates any post-game graph
 
         // Threefold repetition is a draw.
         if newBoard.winner == nil, GameState.isThreefoldRepetition(in: history) {
@@ -961,10 +1072,11 @@ class GameState: ObservableObject {
         guard !thinking else { return }
         thinking = true
         let snapshot = liveBoard
+        let pastBoards = history          // includes the live board; for repetition
         let budget = thinkTime
         let start = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Engine.search(snapshot, timeLimit: budget)
+            let result = Engine.search(snapshot, history: pastBoards, timeLimit: budget)
             let chosen = Engine.pickMove(from: result)
             let elapsed = Date().timeIntervalSince(start)
             if elapsed < minStep { Thread.sleep(forTimeInterval: minStep - elapsed) }
@@ -1037,6 +1149,10 @@ class GameState: ObservableObject {
             }
         case "self":
             setOpponent(.selfPlay)
+        case "start":
+            startGame()
+        case "analyze", "analyse":
+            analyzeGame()
         case "play":
             play()
         case "pause":

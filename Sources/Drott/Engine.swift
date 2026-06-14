@@ -23,6 +23,30 @@ struct SearchResult {
     var depth: Int        // depth of the last fully-completed iteration
 }
 
+/// Tracks how many times each position has occurred, across the real game
+/// history plus the current search path, so the engine treats a move that
+/// would complete a threefold repetition as a draw.
+final class Repetition {
+    private var counts: [UInt64: Int]
+
+    init(_ boards: [Board]) {
+        counts = [:]
+        counts.reserveCapacity(boards.count * 2 + 16)
+        for b in boards { counts[b.repetitionKey, default: 0] += 1 }
+    }
+
+    /// Increment the count for `key` and return the new total.
+    func enter(_ key: UInt64) -> Int {
+        let n = (counts[key] ?? 0) + 1
+        counts[key] = n
+        return n
+    }
+
+    func leave(_ key: UInt64) {
+        if let n = counts[key], n > 1 { counts[key] = n - 1 } else { counts[key] = nil }
+    }
+}
+
 enum Engine {
 
     // Large terminal score; kept well below Int.max so ±mate arithmetic is safe.
@@ -63,8 +87,15 @@ enum Engine {
     /// Root moves are searched with a full window (no sibling pruning) so every
     /// root score is exact — that is what makes the second-best reliable and the
     /// evaluation read-out meaningful. Pruning still applies one level down.
-    static func search(_ board: Board, timeLimit: TimeInterval) -> SearchResult {
+    ///
+    /// `history` is the sequence of real positions already played (ending at
+    /// `board`); the engine uses it to score repetition draws correctly.
+    /// `depthLimit` caps iterative deepening (e.g. 22 for deep analysis).
+    static func search(_ board: Board, history: [Board] = [],
+                       timeLimit: TimeInterval,
+                       depthLimit: Int = maxDepth) -> SearchResult {
         let deadline = Date().addingTimeInterval(timeLimit)
+        let rep = Repetition(history)
         var ordering = ordered(board.legalMoves(), on: board)
 
         guard !ordering.isEmpty else {
@@ -76,15 +107,22 @@ enum Engine {
                                   score: -infinity, secondScore: -infinity, depth: 0)
         var depth = 1
 
-        while depth <= maxDepth {
+        while depth <= min(depthLimit, maxDepth) {
             var scored: [(move: Move, score: Int)] = []
             var completed = true
 
             for mv in ordering {
                 if Date() >= deadline { completed = false; break }
                 let child = board.applying(mv)
-                let s = -negamax(child, depth: depth - 1, alpha: -infinity,
-                                 beta: infinity, ply: 1, deadline: deadline)
+                let key = child.repetitionKey
+                let s: Int
+                if rep.enter(key) >= 3 {
+                    s = 0                                   // threefold → draw
+                } else {
+                    s = -negamax(child, depth: depth - 1, alpha: -infinity,
+                                 beta: infinity, ply: 1, deadline: deadline, rep: rep)
+                }
+                rep.leave(key)
                 scored.append((mv, s))
             }
 
@@ -134,7 +172,7 @@ enum Engine {
     // MARK: Negamax + alpha-beta
 
     private static func negamax(_ board: Board, depth: Int, alpha: Int, beta: Int,
-                                ply: Int, deadline: Date) -> Int {
+                                ply: Int, deadline: Date, rep: Repetition) -> Int {
         if let w = board.winner {
             // `applying` always switches the side to move, so a terminal node's
             // sideToMove is the player about to move into the decided result.
@@ -142,6 +180,8 @@ enum Engine {
             return w == board.sideToMove ? s : -s
         }
         if depth <= 0 {
+            // Quiescence searches only captures (irreversible), so a repetition
+            // can never form there — no rep tracking needed below this point.
             return quiesce(board, alpha: alpha, beta: beta, ply: ply, deadline: deadline)
         }
 
@@ -156,8 +196,15 @@ enum Engine {
         for mv in moves {
             if Date() >= deadline { break }
             let child = board.applying(mv)
-            let score = -negamax(child, depth: depth - 1, alpha: -beta,
-                                 beta: -alpha, ply: ply + 1, deadline: deadline)
+            let key = child.repetitionKey
+            let score: Int
+            if rep.enter(key) >= 3 {
+                score = 0                                   // threefold → draw
+            } else {
+                score = -negamax(child, depth: depth - 1, alpha: -beta,
+                                 beta: -alpha, ply: ply + 1, deadline: deadline, rep: rep)
+            }
+            rep.leave(key)
             if score > best { best = score }
             if best > alpha { alpha = best }
             if alpha >= beta { break }   // beta cutoff

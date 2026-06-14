@@ -7,10 +7,12 @@ import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
-        SelfTest.runIfRequested()   // exits the process when DROTT_SELFTEST=1
+        SelfTest.runIfRequested()      // exits the process when DROTT_SELFTEST=1
+        AppIcon.exportIfRequested()    // exits the process when DROTT_MAKEICON=1
         NSApp.setActivationPolicy(.regular)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppIcon.applyToDock()
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             NSApp.windows.forEach { $0.makeKeyAndOrderFront(nil) }
@@ -53,7 +55,7 @@ struct ContentView: View {
 
 // MARK: - Side panel
 
-private enum SideTab { case game, rules }
+private enum SideTab { case game, graph, rules }
 
 struct SidePanel: View {
     @ObservedObject var game: GameState
@@ -152,19 +154,20 @@ struct SidePanel: View {
             // Tab picker
             Picker("", selection: $tab) {
                 Text("Game").tag(SideTab.game)
+                Text("Graph").tag(SideTab.graph)
                 Text("Rules").tag(SideTab.rules)
             }
             .pickerStyle(.segmented)
 
-            if tab == .game {
-                gameTab
-            } else {
-                rulesTab
+            switch tab {
+            case .game:  gameTab
+            case .graph: graphTab
+            case .rules: rulesTab
             }
 
             Spacer()
 
-            Button("New Game") { game.reset() }
+            Button("Start Game") { game.startGame() }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
         }
@@ -384,6 +387,62 @@ struct SidePanel: View {
         .cornerRadius(3)
         .contentShape(Rectangle())
         .onTapGesture { game.jumpTo(ply: idx + 1) }
+    }
+
+    // MARK: Graph tab (deep post-game analysis)
+
+    private var graphTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            infoCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    fieldLabel("GAME ANALYSIS")
+                    Text("Runs the engine over every move (deeper search, up to depth \(GameState.analysisDepthCap)) and charts the evaluation.")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    fieldLabel("TIME / MOVE")
+                    Picker("", selection: Binding(
+                        get: { game.deepTimePerMove },
+                        set: { game.deepTimePerMove = $0 }
+                    )) {
+                        Text("1s").tag(1.0)
+                        Text("2s").tag(2.0)
+                        Text("5s").tag(5.0)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(game.deepAnalyzing)
+
+                    if game.deepAnalyzing {
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                            Text("Analysing \(game.deepProgress) / \(game.deepTotal)…")
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                        Button("Stop") { game.cancelAnalysis() }
+                            .buttonStyle(.bordered)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Button(game.record.isEmpty ? "No moves yet" : "Analyse game") {
+                            game.analyzeGame()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .frame(maxWidth: .infinity)
+                        .disabled(game.record.isEmpty)
+                    }
+                }
+            }
+
+            infoCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    fieldLabel("EVALUATION")
+                    EvalGraph(scores: game.graphScores,
+                              current: game.viewIndex) { ply in game.jumpTo(ply: ply) }
+                        .frame(height: 150)
+                    Text("Red above the line, Black below · tap to jump")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                }
+            }
+        }
     }
 
     // MARK: Rules tab
@@ -610,6 +669,106 @@ struct EvalBar: View {
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
                 .padding(.vertical, 3)
+        }
+    }
+}
+
+// MARK: - Evaluation graph
+//
+// A chess-style game-evaluation chart. The midline is even; the silhouette
+// rises into red where Red is ahead and falls into dark where Black is ahead.
+// A marker shows the currently-viewed ply; tapping jumps to a ply.
+
+struct EvalGraph: View {
+    let scores: [Int?]          // Red perspective, one per ply (nil = pending)
+    let current: Int            // viewIndex
+    let onSelect: (Int) -> Void
+
+    private let cap = 800.0      // ±8 "pawns" maps to the full half-height
+
+    private func y(_ score: Int, _ h: CGFloat) -> CGFloat {
+        let decisive = Double(Engine.mate - Engine.maxDepth)
+        let s = Double(score)
+        let clamped = s >= decisive ? cap : (s <= -decisive ? -cap : max(-cap, min(cap, s)))
+        let mid = h / 2
+        return mid - CGFloat(clamped / cap) * (mid - 2)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let n = max(scores.count, 1)
+            let dx = n > 1 ? w / CGFloat(n - 1) : w
+
+            ZStack(alignment: .topLeading) {
+                Color(red: 0.16, green: 0.16, blue: 0.18)
+
+                // Even-position midline.
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: h / 2))
+                    p.addLine(to: CGPoint(x: w, y: h / 2))
+                }.stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+
+                // Filled silhouette of the evaluation.
+                if scores.contains(where: { $0 != nil }) {
+                    silhouette(w: w, h: h, dx: dx)
+                }
+
+                // Current-ply marker.
+                if current < n {
+                    let x = CGFloat(current) * dx
+                    Path { p in
+                        p.move(to: CGPoint(x: x, y: 0))
+                        p.addLine(to: CGPoint(x: x, y: h))
+                    }.stroke(Color.yellow.opacity(0.9), lineWidth: 1.5)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        let ply = Int((value.location.x / dx).rounded())
+                        onSelect(max(0, min(n - 1, ply)))
+                    }
+            )
+        }
+    }
+
+    // Build closed areas above/below the midline and fill each with its colour.
+    @ViewBuilder
+    private func silhouette(w: CGFloat, h: CGFloat, dx: CGFloat) -> some View {
+        let mid = h / 2
+        let pts: [CGPoint] = scores.enumerated().compactMap { i, s in
+            s.map { CGPoint(x: CGFloat(i) * dx, y: y($0, h)) }
+        }
+        ZStack {
+            // Red area (between curve and midline, clipped to the top half).
+            areaPath(pts: pts, mid: mid)
+                .fill(Color(red: 0.80, green: 0.20, blue: 0.18).opacity(0.85))
+                .clipShape(Rectangle().path(in: CGRect(x: 0, y: 0, width: w, height: mid)))
+            // Black area (bottom half).
+            areaPath(pts: pts, mid: mid)
+                .fill(Color(red: 0.05, green: 0.05, blue: 0.06).opacity(0.85))
+                .clipShape(Rectangle().path(in: CGRect(x: 0, y: mid, width: w, height: h - mid)))
+            // The evaluation line itself.
+            Path { p in
+                guard let first = pts.first else { return }
+                p.move(to: first)
+                for pt in pts.dropFirst() { p.addLine(to: pt) }
+            }.stroke(Color.white.opacity(0.7), lineWidth: 1)
+        }
+    }
+
+    private func areaPath(pts: [CGPoint], mid: CGFloat) -> Path {
+        Path { p in
+            guard let first = pts.first, let last = pts.last else { return }
+            p.move(to: CGPoint(x: first.x, y: mid))
+            p.addLine(to: first)
+            for pt in pts.dropFirst() { p.addLine(to: pt) }
+            p.addLine(to: CGPoint(x: last.x, y: mid))
+            p.closeSubpath()
         }
     }
 }

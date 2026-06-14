@@ -45,6 +45,9 @@ enum SelfTest {
         fortControl()
         castleHold()
         threefold()
+        repetitionAwareEngine()
+        depthCap()
+        startFlow()
         dragMath()
         engineSanity()
         selfPlayStress()
@@ -191,6 +194,66 @@ enum SelfTest {
         // A position seen only twice is not yet a draw.
         let twice = Array(history.prefix(5))   // start seen at 0 and 4
         check(!GameState.isThreefoldRepetition(in: twice), "twice-seen position is not a draw")
+    }
+
+    // The engine treats a move into a thrice-seen position as a draw. A losing
+    // side (down a Wolf, kings far apart so there are no tactics) should grab
+    // that draw when the history makes it available.
+    private static func repetitionAwareEngine() {
+        print("[repetition-aware engine]")
+        let redKing  = Position(col: 5, row: 2)   // F3, central & safe
+        let redWolf  = Position(col: 5, row: 5)   // F6
+        let blackA11 = Position(col: 0, row: 10)  // A11 corner, far from Red
+        let blackB11 = Position(col: 1, row: 10)  // B11
+
+        // Root: Black to move, down a Wolf, no tactics available either way.
+        var root = Board.empty()
+        root.put(.king, .red, redKing)
+        root.put(.wolf, .red, redWolf)
+        root.put(.king, .black, blackA11)
+        root.sideToMove = .black
+
+        // The position after Black shuffles A11–B11 (Red to move).
+        var child = Board.empty()
+        child.put(.king, .red, redKing)
+        child.put(.wolf, .red, redWolf)
+        child.put(.king, .black, blackB11)
+        child.sideToMove = .red
+
+        // Without history, Black is losing (Red marches the Wolf into Black's
+        // undefended fort).
+        let losing = Engine.search(root, history: [root], timeLimit: 0.3)
+        check(losing.score < 0, "without history Black is losing (\(losing.score))")
+
+        // With `child` already seen twice, A11–B11 completes a threefold → a draw
+        // the engine prefers to the losing line.
+        let saved = Engine.search(root, history: [child, child, root], timeLimit: 0.3)
+        check(saved.score == 0, "engine claims the repetition draw (score \(saved.score))")
+        check(saved.score > losing.score, "repetition awareness beats the losing line")
+    }
+
+    // The depth-limit cap is respected (used by deep analysis, max 22).
+    private static func depthCap() {
+        print("[depth cap]")
+        let result = Engine.search(Board(), timeLimit: 5.0, depthLimit: 2)
+        check(result.best != nil, "capped search returns a move")
+        check(result.depth <= 2, "iterative deepening stopped at the cap (depth \(result.depth))")
+    }
+
+    // Picking an opponent must NOT auto-start; startGame() begins play.
+    private static func startFlow() {
+        print("[start flow]")
+        let g = GameState()
+        g.thinkTime = 0.05            // keep any spawned search short
+        g.setOpponent(.selfPlay)
+        check(!g.isPlaying, "selecting self-play does not auto-start")
+        g.setOpponent(.off)
+        g.startGame()
+        check(!g.isPlaying, "starting a two-human game does not autoplay")
+        g.setOpponent(.selfPlay)
+        g.startGame()
+        check(g.isPlaying, "startGame() begins self-play")
+        g.pause()
     }
 
     // Drag-and-drop coordinate mapping: a drop's target square must match the

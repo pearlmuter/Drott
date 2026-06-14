@@ -311,20 +311,45 @@ enum SelfTest {
         check(result.depth <= 2, "iterative deepening stopped at the cap (depth \(result.depth))")
     }
 
-    // Picking an opponent must NOT auto-start; startGame() begins play.
+    // Picking an opponent must NOT auto-start; only startGame() (from setup)
+    // begins play. After a game ends, resignation/agreement decide the result.
     private static func startFlow() {
         print("[start flow]")
         let g = GameState()
         g.thinkTime = 0.05            // keep any spawned search short
+
         g.setOpponent(.selfPlay)
-        check(!g.isPlaying, "selecting self-play does not auto-start")
-        g.setOpponent(.off)
-        g.startGame()
-        check(!g.isPlaying, "starting a two-human game does not autoplay")
-        g.setOpponent(.selfPlay)
-        g.startGame()
-        check(g.isPlaying, "startGame() begins self-play")
+        check(g.phase == .setup && !g.isPlaying, "picking self-play stays in setup, no auto-start")
+
+        g.reset(); g.setOpponent(.off); g.startGame()
+        check(g.phase == .playing && !g.isPlaying, "starting a two-human game does not autoplay")
+
+        g.reset(); g.setOpponent(.selfPlay); g.startGame()
+        check(g.phase == .playing && g.isPlaying, "startGame() begins self-play")
         g.pause()
+
+        // Start Game does nothing unless we are in setup.
+        g.reset()
+        g.setOpponent(.computerBlack)   // human = Red
+        g.startGame()
+        g.startGame()                   // second call ignored (already playing)
+        check(g.phase == .playing, "Start Game is a no-op once playing")
+
+        // Resignation: the human (Red) concedes, Black wins, game finishes.
+        g.resign()
+        check(g.isGameOver && g.displayWinner == .black && g.phase == .finished,
+              "resigning concedes to the opponent and finishes the game")
+
+        // Agreed draw between two humans.
+        let h = GameState()
+        h.setOpponent(.off); h.startGame()
+        h.offerDraw()
+        check(h.drawAgreed && h.isGameOver && h.phase == .finished,
+              "offering a draw in a two-human game agrees it")
+
+        // Deep analysis is only available after entering analysis from finished.
+        g.beginAnalysis()
+        check(g.phase == .analysis, "Analyse game enters analysis")
     }
 
     // Drag-and-drop coordinate mapping: a drop's target square must match the

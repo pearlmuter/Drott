@@ -43,7 +43,9 @@ struct ContentView: View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 BoardView(game: game)
-                GameGraphPanel(game: game)
+                if game.showGraph {
+                    GameGraphPanel(game: game)
+                }
             }
             .padding(16)
             Divider()
@@ -64,24 +66,21 @@ struct GameGraphPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Text("GAME EVALUATION")
+                Text("ENGINE ANALYSIS")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 if game.deepAnalyzing {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
-                        Text("Deeper analysis \(game.deepProgress)/\(game.deepTotal)…")
+                        Text("\(game.deepProgress)/\(game.deepTotal) · \(GameGraphPanel.deepSeconds(game.deepTimePerMove))s/move")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                         Button("Stop") { game.cancelAnalysis() }
                             .controlSize(.small)
                     }
                 } else {
-                    Text("\(GameGraphPanel.deepSeconds(game.deepTimePerMove))s/move · depth ≤\(GameState.analysisDepthCap)")
+                    Text("deep \(GameGraphPanel.deepSeconds(game.deepTimePerMove))s/move · depth ≤\(GameState.analysisDepthCap)")
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    Button("Deeper analysis") { game.analyzeGame() }
-                        .controlSize(.small)
-                        .disabled(game.record.isEmpty)
                 }
             }
 
@@ -90,13 +89,13 @@ struct GameGraphPanel: View {
             }
             .frame(height: 96)
 
-            Text("Red above the midline, Black below · in-game eval, replaced by deeper analysis · click to jump")
+            Text("Red above the midline, Black below · click to jump to a move")
                 .font(.system(size: 9)).foregroundStyle(.tertiary)
         }
         .frame(width: SQ * 11 + 30)   // match the board's width (bar + labels + grid)
     }
 
-    private static func deepSeconds(_ t: Double) -> String {
+    static func deepSeconds(_ t: Double) -> String {
         t == t.rounded() ? String(Int(t)) : String(format: "%.1f", t)
     }
 }
@@ -112,80 +111,27 @@ struct SidePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
 
-            // Turn / Winner
-            infoCard {
+            statusCard
+
+            // Settings are only shown while setting up a new game.
+            if game.phase == .setup {
+                settingsCard
+            }
+
+            // Resign / draw while a human is playing.
+            if game.canOfferResultControls {
                 HStack(spacing: 8) {
-                    if game.isDrawShown {
-                        Circle().fill(Color.secondary).frame(width: 13, height: 13)
-                        VStack(alignment: .leading, spacing: 1) {
-                            fieldLabel("RESULT")
-                            Text("Draw").font(.title3.weight(.semibold))
-                        }
-                    } else {
-                        let side = game.winner ?? game.turn
-                        Circle()
-                            .fill(side == .red ? Color.red : Color.primary)
-                            .frame(width: 13, height: 13)
-                        VStack(alignment: .leading, spacing: 1) {
-                            fieldLabel(game.winner != nil ? "WINNER" : "TURN")
-                            Text(side.rawValue).font(.title3.weight(.semibold))
-                        }
-                    }
-                    Spacer()
-                    if game.thinking {
-                        HStack(spacing: 5) {
-                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
-                            Text("thinking…").font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                    }
+                    Button("Resign") { game.resign() }
+                        .frame(maxWidth: .infinity)
+                    Button("Offer draw") { game.offerDraw() }
+                        .frame(maxWidth: .infinity)
                 }
             }
 
-            // Opponent
-            infoCard {
-                VStack(alignment: .leading, spacing: 6) {
-                    fieldLabel("COMPUTER PLAYS")
-                    Picker("", selection: Binding(
-                        get: { game.opponent },
-                        set: { game.setOpponent($0) }
-                    )) {
-                        Text("Off").tag(OpponentMode.off)
-                        Text("Black").tag(OpponentMode.computerBlack)
-                        Text("Red").tag(OpponentMode.computerRed)
-                        Text("Self").tag(OpponentMode.selfPlay)
-                    }
-                    .pickerStyle(.segmented)
-
-                    if game.opponent != .off {
-                        fieldLabel("STRENGTH")
-                        Picker("", selection: Binding(
-                            get: { game.thinkTime },
-                            set: { game.thinkTime = $0 }
-                        )) {
-                            Text("Fast").tag(0.4)
-                            Text("Normal").tag(1.2)
-                            Text("Strong").tag(2.5)
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    if game.opponent == .selfPlay {
-                        fieldLabel("SPEED")
-                        Picker("", selection: Binding(
-                            get: { game.stepDelay },
-                            set: { game.stepDelay = $0 }
-                        )) {
-                            Text("Slow").tag(2.0)
-                            Text("1×").tag(1.0)
-                            Text("Fast").tag(0.4)
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                }
+            // Playback / scrubbing once there are moves to review.
+            if game.record.count > 0 {
+                playbackCard
             }
-
-            // Playback controls
-            playbackCard
 
             // Selected piece
             if let sel = game.selected, let p = game.piece(at: sel) {
@@ -213,9 +159,121 @@ struct SidePanel: View {
 
             Spacer()
 
+            phaseButtons
+        }
+    }
+
+    // Turn / result, plus any transient status note.
+    private var statusCard: some View {
+        infoCard {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    if game.isDrawShown {
+                        Circle().fill(Color.secondary).frame(width: 13, height: 13)
+                        VStack(alignment: .leading, spacing: 1) {
+                            fieldLabel("RESULT")
+                            Text("Draw").font(.title3.weight(.semibold))
+                        }
+                    } else {
+                        let side = game.displayWinner ?? game.turn
+                        Circle()
+                            .fill(side == .red ? Color.red : Color.primary)
+                            .frame(width: 13, height: 13)
+                        VStack(alignment: .leading, spacing: 1) {
+                            fieldLabel(game.displayWinner != nil ? "WINNER" : "TURN")
+                            Text(side.rawValue).font(.title3.weight(.semibold))
+                        }
+                    }
+                    Spacer()
+                    if game.thinking {
+                        HStack(spacing: 5) {
+                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                            Text("thinking…").font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let msg = game.statusMessage {
+                    Text(msg).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    // Board size / opponent / strength / speed — setup only.
+    private var settingsCard: some View {
+        infoCard {
+            VStack(alignment: .leading, spacing: 6) {
+                fieldLabel("COMPUTER PLAYS")
+                Picker("", selection: Binding(
+                    get: { game.opponent },
+                    set: { game.setOpponent($0) }
+                )) {
+                    Text("Off").tag(OpponentMode.off)
+                    Text("Black").tag(OpponentMode.computerBlack)
+                    Text("Red").tag(OpponentMode.computerRed)
+                    Text("Self").tag(OpponentMode.selfPlay)
+                }
+                .pickerStyle(.segmented)
+
+                if game.opponent != .off {
+                    fieldLabel("STRENGTH")
+                    Picker("", selection: Binding(
+                        get: { game.thinkTime },
+                        set: { game.thinkTime = $0 }
+                    )) {
+                        Text("Fast").tag(0.4)
+                        Text("Normal").tag(1.2)
+                        Text("Strong").tag(2.5)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if game.opponent == .selfPlay {
+                    fieldLabel("SPEED")
+                    Picker("", selection: Binding(
+                        get: { game.stepDelay },
+                        set: { game.stepDelay = $0 }
+                    )) {
+                        Text("Slow").tag(2.0)
+                        Text("1×").tag(1.0)
+                        Text("Fast").tag(0.4)
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+        }
+    }
+
+    // Primary action button(s) per phase.
+    @ViewBuilder
+    private var phaseButtons: some View {
+        switch game.phase {
+        case .setup:
             Button("Start Game") { game.startGame() }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
+        case .playing:
+            Button("New Game") { game.reset() }
+                .frame(maxWidth: .infinity)
+        case .finished:
+            VStack(spacing: 8) {
+                Button("Analyse game") { game.beginAnalysis() }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                Button("New Game") { game.reset() }
+                    .frame(maxWidth: .infinity)
+            }
+        case .analysis:
+            VStack(spacing: 8) {
+                Button(game.showGraph ? "Re-run engine analysis" : "Engine analysis") {
+                    game.runEngineAnalysis()
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity)
+                .disabled(game.deepAnalyzing)
+                Button("New Game") { game.reset() }
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
@@ -394,15 +452,11 @@ struct SidePanel: View {
                         }
                     }
 
-                    if game.isDrawShown {
-                        Text("Draw — threefold repetition")
+                    if let result = game.resultMessage {
+                        Text(result)
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 2)
-                    } else if let w = game.winner {
-                        Text(game.winMessage(for: w, reason: game.winReason))
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(w == .red ? .red : .primary)
+                            .foregroundStyle(game.displayWinner == .red ? .red
+                                             : (game.displayWinner == .black ? .primary : .secondary))
                             .padding(.top, 2)
                     }
                 }

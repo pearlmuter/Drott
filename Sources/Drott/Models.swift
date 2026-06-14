@@ -600,6 +600,20 @@ class GameState: ObservableObject {
     @Published var highlightMoves: Set<Position>   = []
     @Published var highlightAttacks: Set<Position> = []
 
+    /// Where we are in the New Game → Start → Finish → Analyse → Engine-analysis
+    /// flow. Gates what the UI shows and whether the board accepts input.
+    enum Phase { case setup, playing, finished, analysis }
+    @Published var phase: Phase = .setup
+    /// The eval graph is hidden until the deep "Engine analysis" is requested.
+    @Published var showGraph = false
+
+    /// The side that resigned (the other side wins), or nil.
+    @Published var concededLoser: Side? = nil
+    /// True if the game ended by an agreed draw.
+    @Published var drawAgreed = false
+    /// A short transient note (e.g. "Draw declined"), shown briefly.
+    @Published var statusMessage: String? = nil
+
     /// Who controls each side.
     @Published var opponent: OpponentMode = .off
     /// Search time budget per move, in seconds.
@@ -657,16 +671,55 @@ class GameState: ObservableObject {
     var canStepBack: Bool { viewIndex > 0 }
     var canStepForward: Bool { viewIndex < history.count - 1 }
 
-    /// The game has ended (a side won, or it was drawn).
-    var isGameOver: Bool { liveBoard.winner != nil || drawPly != nil }
-    /// True when the viewed position is the drawn final position.
-    var isDrawShown: Bool { drawPly != nil && viewIndex == drawPly }
+    /// The game has ended (a side won, was drawn, was resigned, or drawn by
+    /// agreement).
+    var isGameOver: Bool {
+        liveBoard.winner != nil || drawPly != nil || concededLoser != nil || drawAgreed
+    }
+    /// Viewing the last (final) position.
+    var viewingFinal: Bool { viewIndex == history.count - 1 }
+
+    // MARK: Result for display (considers board result + resignation/agreement)
+
+    /// The winning side to show for the viewed position, if decided.
+    var displayWinner: Side? {
+        if let w = viewedBoard.winner { return w }
+        if viewingFinal, let loser = concededLoser { return loser.other }
+        return nil
+    }
+    /// Whether the viewed position is a drawn ending.
+    var isDrawShown: Bool {
+        if drawPly != nil && viewIndex == drawPly { return true }
+        if viewingFinal, drawAgreed { return true }
+        return false
+    }
+    /// Human-readable ending for the viewed position, if it is a finished one.
+    var resultMessage: String? {
+        if let w = viewedBoard.winner { return winMessage(for: w, reason: viewedBoard.winReason) }
+        if drawPly != nil && viewIndex == drawPly { return "Draw — threefold repetition" }
+        guard viewingFinal else { return nil }
+        if let loser = concededLoser { return "\(loser.other.rawValue) wins — \(loser.rawValue) resigned" }
+        if drawAgreed { return "Draw — agreed" }
+        return nil
+    }
+
+    /// Which side a human controls (the resigning / draw-offering side), or nil.
+    var humanSide: Side? {
+        switch opponent {
+        case .computerBlack: return .red
+        case .computerRed:   return .black
+        case .off:           return liveBoard.sideToMove
+        case .selfPlay:      return nil
+        }
+    }
+    /// Resign / draw offers are available while a human is playing.
+    var canOfferResultControls: Bool { phase == .playing && !isGameOver && humanSide != nil }
 
     /// The move that produced the currently-viewed position (for highlighting).
     var lastMove: Move? { viewIndex >= 1 ? record[viewIndex - 1].move : nil }
 
     /// The piece currently being dragged (on the live board), if any.
-    var draggedPiece: Piece? { dragOrigin.flatMap { liveBoard.piece(at: $0) } }
+    var draggedPiece: Piece? { dragOrigin.flatMap { interactiveBoard.piece(at: $0) } }
 
     /// True if the latest position in `history` has occurred three times.
     static func isThreefoldRepetition(in history: [Board]) -> Bool {
@@ -678,6 +731,8 @@ class GameState: ObservableObject {
 
     // MARK: Public API
 
+    /// "New Game": clear the board and return to the setup phase. Does NOT start
+    /// play — the computer only moves once the user presses Start Game.
     func reset() {
         isPlaying = false
         thinking = false
@@ -690,18 +745,98 @@ class GameState: ObservableObject {
         highlightAttacks = []
         cancelDeepAnalysis()
         graphScores = [nil]            // one slot for the opening position
+        showGraph = false
+        concededLoser = nil
+        drawAgreed = false
+        statusMessage = nil
+        phase = .setup
         scheduleAnalysis()
-        // Note: does not auto-start. Use startGame() to begin with the options.
     }
 
-    /// Reset to a fresh game and begin play with the chosen options.
+    /// "Start Game": leave setup and begin play with the chosen options.
     func startGame() {
-        reset()
+        guard phase == .setup else { return }
+        phase = .playing
         if opponent == .selfPlay {
             play()
         } else {
             maybeScheduleReply()   // computer opens if it controls the first move
         }
+    }
+
+    /// "Analyse game": after the game is over, enter analysis — move pieces freely
+    /// and watch the engine evaluation change. The deep graph stays hidden until
+    /// "Engine analysis" is requested.
+    func beginAnalysis() {
+        guard phase == .finished else { return }
+        phase = .analysis
+        jumpToStart()              // start the review at the opening
+    }
+
+    /// "Engine analysis": run the deep per-position sweep and reveal the graph.
+    func runEngineAnalysis() {
+        guard phase == .analysis else { return }
+        showGraph = true
+        analyzeGame()
+    }
+
+    // MARK: Resign & draw
+
+    /// The human resigns; the opposing side wins and the game ends.
+    func resign() {
+        guard canOfferResultControls, let loser = humanSide else { return }
+        concededLoser = loser
+        isPlaying = false
+        if !graphScores.isEmpty {
+            graphScores[history.count - 1] = (loser.other == .red) ? Engine.mate : -Engine.mate
+        }
+        statusMessage = nil
+        phase = .finished
+        clearSelection()
+        scheduleAnalysis()
+    }
+
+    /// The human offers a draw. Against another human it is simply agreed;
+    /// against the computer it is accepted only if the computer is not winning.
+    func offerDraw() {
+        guard canOfferResultControls else { return }
+        switch opponent {
+        case .off:
+            agreeDraw()
+        case .computerBlack, .computerRed:
+            guard let computer = humanSide?.other else { return }
+            let snapshot = liveBoard
+            let pastBoards = history
+            statusMessage = "Offering a draw…"
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result = Engine.search(snapshot, history: pastBoards, timeLimit: 0.6)
+                // Score from the computer's perspective.
+                let computerEval = snapshot.sideToMove == computer ? result.score : -result.score
+                DispatchQueue.main.async {
+                    guard let self, self.canOfferResultControls, self.liveBoard == snapshot else {
+                        self?.statusMessage = nil; return
+                    }
+                    // Accept if the computer is not clearly better (≤ ~0.5 pawn).
+                    if computerEval <= 50 {
+                        self.agreeDraw()
+                    } else {
+                        self.statusMessage = "Draw declined"
+                    }
+                }
+            }
+        case .selfPlay:
+            return
+        }
+    }
+
+    private func agreeDraw() {
+        drawAgreed = true
+        isPlaying = false
+        if !graphScores.isEmpty { graphScores[history.count - 1] = 0 }
+        statusMessage = nil
+        phase = .finished
+        clearSelection()
+        scheduleAnalysis()
     }
 
     func piece(at pos: Position) -> Piece? { viewedBoard.piece(at: pos) }
@@ -713,22 +848,34 @@ class GameState: ObservableObject {
     /// Notation for a candidate move in the currently-viewed position.
     func notation(for move: Move) -> String { viewedBoard.notation(for: move) }
 
-    func tap(_ pos: Position) {
-        // Taps only act on the live position, for a human-controlled side.
-        guard atLatest, !isGameOver, !thinking else { return }
-        guard controller(of: liveBoard.sideToMove) == .human else { return }
+    /// The board the user can currently move on: the live game while playing, or
+    /// the viewed position while analysing (so variations branch from anywhere).
+    var interactiveBoard: Board { phase == .analysis ? viewedBoard : liveBoard }
 
-        let tapped = liveBoard.piece(at: pos)
-        let stm = liveBoard.sideToMove
+    /// True if the user may move a piece right now.
+    private var canInteract: Bool {
+        guard !thinking else { return false }
+        switch phase {
+        case .playing:  return atLatest && !isGameOver && controller(of: liveBoard.sideToMove) == .human
+        case .analysis: return true        // free exploration of either side
+        case .setup, .finished: return false
+        }
+    }
+
+    func tap(_ pos: Position) {
+        guard canInteract else { return }
+        let board = interactiveBoard
+        let tapped = board.piece(at: pos)
+        let stm = board.sideToMove
         if let sel = selected {
             if sel == pos {
                 selected = nil
             } else if let t = tapped, t.side == stm {
                 selected = pos
-            } else if let p = liveBoard.piece(at: sel) {
-                let (m, a) = liveBoard.validDestinations(for: p)
+            } else if let p = board.piece(at: sel) {
+                let (m, a) = board.validDestinations(for: p)
                 if m.contains(pos) || a.contains(pos) {
-                    perform(Move(from: sel, to: pos, isCapture: a.contains(pos)))
+                    makeMove(Move(from: sel, to: pos, isCapture: a.contains(pos)))
                     return
                 }
             }
@@ -738,16 +885,28 @@ class GameState: ObservableObject {
         updateHighlights()
     }
 
+    /// Play a move. While analysing a past position, branch by dropping the
+    /// future first so the move starts a fresh variation.
+    private func makeMove(_ move: Move) {
+        if phase == .analysis && !atLatest {
+            let keep = viewIndex
+            history = Array(history.prefix(keep + 1))
+            record  = Array(record.prefix(keep))
+            graphScores = Array(graphScores.prefix(keep + 1))
+            drawPly = nil
+        }
+        perform(move)
+    }
+
     // MARK: Drag to move
 
     /// Called continuously as a piece is dragged. Picks up the piece on first
     /// movement (lighting up its legal targets) and tracks the cursor offset.
     func dragChanged(from pos: Position, translation: CGSize) {
-        guard atLatest, !isGameOver, !thinking else { return }
-        guard controller(of: liveBoard.sideToMove) == .human else { return }
-
+        guard canInteract else { return }
+        let board = interactiveBoard
         if dragOrigin == nil {
-            guard let p = liveBoard.piece(at: pos), p.side == liveBoard.sideToMove else { return }
+            guard let p = board.piece(at: pos), p.side == board.sideToMove else { return }
             dragOrigin = pos
             selected = pos
             updateHighlights()
@@ -767,16 +926,16 @@ class GameState: ObservableObject {
     /// the move if it is legal; otherwise the piece snaps back.
     func dragEnded(from pos: Position, translation: CGSize) {
         defer { dragOrigin = nil; dragTranslation = .zero }
-        guard dragOrigin == pos, let p = liveBoard.piece(at: pos) else { return }
+        let board = interactiveBoard
+        guard dragOrigin == pos, let p = board.piece(at: pos) else { return }
 
         let target = GameState.dropTarget(from: pos, translation: translation)
-
         guard Position.valid(col: target.col, row: target.row) else {
             clearSelection(); return
         }
-        let (m, a) = liveBoard.validDestinations(for: p)
+        let (m, a) = board.validDestinations(for: p)
         if m.contains(target) || a.contains(target) {
-            perform(Move(from: pos, to: target, isCapture: a.contains(target)))
+            makeMove(Move(from: pos, to: target, isCapture: a.contains(target)))
         } else {
             clearSelection()
         }
@@ -799,7 +958,7 @@ class GameState: ObservableObject {
             analysis = nil
             return
         }
-        if let w = board.winner {
+        if let w = displayWinner {
             evalRed = (w == .red) ? Engine.mate : -Engine.mate
             analysis = nil
             return
@@ -825,7 +984,7 @@ class GameState: ObservableObject {
     /// and overwrite the graph one position at a time, replacing the contemporary
     /// in-game evaluations as it goes.
     func analyzeGame() {
-        guard history.count > 1 else { return }
+        guard phase == .analysis, history.count > 1 else { return }
         deepGen += 1
         let gen = deepGen
         let boards = history
@@ -971,9 +1130,11 @@ class GameState: ObservableObject {
             return
         }
 
-        // At the live end — generate the next move if a computer is to move.
+        // At the live end — generate the next move if a computer is to move
+        // (only while actually playing; replay/analysis never generates).
         let live = liveBoard
-        guard !isGameOver, controller(of: live.sideToMove) == .computer, !thinking else {
+        guard phase == .playing, !isGameOver,
+              controller(of: live.sideToMove) == .computer, !thinking else {
             isPlaying = false
             return
         }
@@ -1000,6 +1161,7 @@ class GameState: ObservableObject {
         // A new move supersedes any in-progress deep analysis, but the graph of
         // already-recorded evaluations is kept and extended.
         cancelDeepAnalysis()
+        statusMessage = nil
 
         let fromIndex = history.count - 1
         let wasAtLatest = atLatest
@@ -1030,6 +1192,9 @@ class GameState: ObservableObject {
             } else {
                 graphScores[history.count - 1] = 0   // draw
             }
+            // A real game ending moves us to the finished phase (exploring a
+            // variation into a terminal position stays in analysis).
+            if phase == .playing { phase = .finished }
             return
         }
         maybeScheduleReply()
@@ -1049,6 +1214,7 @@ class GameState: ObservableObject {
     /// In single-computer modes, reply to the human as soon as it is the
     /// computer's turn. (Self-play is driven by `advanceLoop` instead.)
     private func maybeScheduleReply() {
+        guard phase == .playing else { return }
         guard opponent == .computerBlack || opponent == .computerRed else { return }
         guard !isGameOver, controller(of: liveBoard.sideToMove) == .computer, !thinking else { return }
         generateEngineMove(minStep: 0.15) { [weak self] in
@@ -1094,10 +1260,11 @@ class GameState: ObservableObject {
     // MARK: Highlights
 
     private func updateHighlights() {
-        guard let sel = selected, let p = liveBoard.piece(at: sel) else {
+        let board = interactiveBoard
+        guard let sel = selected, let p = board.piece(at: sel) else {
             highlightMoves = []; highlightAttacks = []; return
         }
-        let (m, a) = liveBoard.validDestinations(for: p)
+        let (m, a) = board.validDestinations(for: p)
         highlightMoves = m; highlightAttacks = a
     }
 
@@ -1145,8 +1312,14 @@ class GameState: ObservableObject {
             setOpponent(.selfPlay)
         case "start":
             startGame()
-        case "analyze", "analyse":
-            analyzeGame()
+        case "review", "analysegame":
+            beginAnalysis()
+        case "analyze", "analyse", "engine":
+            runEngineAnalysis()
+        case "resign":
+            resign()
+        case "draw":
+            offerDraw()
         case "play":
             play()
         case "pause":

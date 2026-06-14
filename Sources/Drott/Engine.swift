@@ -119,9 +119,28 @@ enum Engine {
     static let infinity = 2_000_000
     static let maxDepth = 32
 
-    /// How much a square of mobility is worth (scales the whole eval so that
-    /// ~one piece of mobility advantage ≈ 0.04 "pawns" in the display).
-    static let mobilityWeight = 4
+    /// Fixed material value per piece type = the squares it can reach on an open
+    /// board (its "characteristic" mobility), scaled ×25 so a Skjolding ≈ 100
+    /// (one "pawn"). This is stable, so a capture is always worth the captured
+    /// piece's real value even when it is momentarily boxed in.
+    static func baseValue(_ t: PieceType) -> Int {
+        switch t {
+        case .king:      return 0     // its loss is the terminal mate score
+        case .skjolding: return 100   //  4 squares
+        case .bowman:    return 150   //  6
+        case .spearman:  return 175   //  7
+        case .berserker: return 275   // 11
+        case .hunter:    return 300   // 12
+        case .wolf:      return 300   // 12
+        case .elf:       return 500   // 20
+        case .dwarf:     return 500   // 20
+        }
+    }
+
+    /// Bonus per square a piece can reach *right now* (activity on top of the
+    /// fixed base value). Small, so it differentiates active vs. passive pieces
+    /// without swamping material.
+    static let mobilityWeight = 3
 
     // How often, and within what margin, the engine plays the second-best move
     // instead of the best — just enough to break determinism without blundering.
@@ -426,9 +445,10 @@ enum Engine {
     // Static score from `me`'s perspective (positive = good for `me`). Symmetric:
     // every term is added for `me` and subtracted for the opponent.
     //
-    // Piece value IS mobility: each piece contributes the number of squares it
-    // can reach, scaled by `mobilityWeight`. Material and activity therefore fall
-    // out of the same term — a trapped Wolf is worth little, a free one a lot.
+    // Piece value = a fixed base (its characteristic open-board reach) plus a
+    // small bonus for its current reach. The base keeps captures correctly
+    // valued even when a piece is momentarily boxed in; the bonus rewards
+    // activity. Win-condition terms (king/castle/fort) sit on top.
 
     static func evaluate(_ board: Board, for me: Side) -> Int {
         let opp = me.other
@@ -445,8 +465,9 @@ enum Engine {
             guard let p = sq else { continue }
             let sgn = p.side == me ? 1 : -1
 
-            // Material = mobility (squares this piece can currently reach).
-            score += sgn * board.mobilityCount(for: p) * mobilityWeight
+            // Material = fixed base value for the piece type, plus a small bonus
+            // for the squares it can currently reach (activity).
+            score += sgn * (baseValue(p.type) + board.mobilityCount(for: p) * mobilityWeight)
 
             // Skjolding advancement toward the enemy.
             if p.type == .skjolding {

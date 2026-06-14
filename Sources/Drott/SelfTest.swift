@@ -45,6 +45,7 @@ enum SelfTest {
         castleHold()
         fortTiming()
         hunterBoxedIn()
+        freeCapture()
         threefold()
         repetitionAwareEngine()
         depthCap()
@@ -194,6 +195,27 @@ enum SelfTest {
         let reply = in2.applying(in2.legalMoves().first!)
         check(reply.winner == .red && reply.winReason == .fort,
               "Red wins by holding the fort through Black's reply")
+    }
+
+    // A free capture of a more valuable, momentarily boxed-in piece must be
+    // taken (the bug behind the bowman the engine refused to win). The Black
+    // Bowman on E6 is hemmed in (a Red Skjolding in front, the castle beside it)
+    // so its *current* mobility is low — but its base value still exceeds a
+    // Skjolding's, so the capture should win material.
+    private static func freeCapture() {
+        print("[free capture]")
+        var b = Board.empty()
+        b.put(.king, .red, Position(col: 0, row: 0))
+        b.put(.king, .black, Position(col: 10, row: 10))
+        b.put(.bowman, .black, Position(col: 4, row: 5))     // E6
+        b.put(.skjolding, .red, Position(col: 4, row: 4))    // E5, blocks the bowman
+        b.put(.skjolding, .red, Position(col: 3, row: 4))    // D5, can take E6 diagonally
+        b.put(.skjolding, .red, Position(col: 7, row: 3))    // H4, a quiet alternative
+        b.sideToMove = .red
+
+        let best = Engine.bestMove(for: b, timeLimit: 0.5)
+        check(best?.to == Position(col: 4, row: 5),
+              "engine captures the boxed-in Bowman (got \(best.map { b.notation(for: $0) } ?? "nil"))")
     }
 
     // The Hunter cannot jump: at the start it is boxed in by its own pieces and

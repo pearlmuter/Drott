@@ -80,6 +80,8 @@ final class SearchContext {
     /// can take a meaningful fraction of a short budget — check often enough that
     /// a 0.03s self-play search doesn't overshoot into the hundreds of ms.
     private var lastTimedOut = false
+    /// Sticky "deadline has passed" flag, read without side effects.
+    var isExpired: Bool { lastTimedOut }
     func timedOut() -> Bool {
         if lastTimedOut { return true }                 // sticky once past deadline
         deadlineCheck &+= 1
@@ -254,6 +256,10 @@ enum Engine {
             if score > alpha { alpha = score }
         }
 
+        // If the deadline passed at any point during this iteration (e.g. inside
+        // the last move's search), its scores are unreliable — discard them.
+        if ctx.isExpired { completed = false }
+
         // A partial iteration can still improve the move ordering, but its scores
         // are unreliable, so the caller discards it for the reported result.
         guard completed else {
@@ -309,6 +315,8 @@ enum Engine {
         var bestMove: Move? = nil
         var searchedFirst = false
 
+        let k0 = ctx.killer(ply, 0), k1 = ctx.killer(ply, 1)
+        var moveIndex = 0
         for mv in moves {
             if ctx.timedOut() { break }
             let child = board.applying(mv)
@@ -321,15 +329,25 @@ enum Engine {
                 score = -negamax(child, key: childKey, depth: depth - 1,
                                  alpha: -beta, beta: -alpha, ply: ply + 1, ctx: ctx)
             } else {
-                score = -negamax(child, key: childKey, depth: depth - 1,
+                // Late move reduction: search likely-bad quiet moves shallower
+                // first, and only re-search at full depth if they beat alpha.
+                let quiet = !mv.isCapture && mv != k0 && mv != k1
+                let reduction = (depth >= 3 && moveIndex >= 3 && quiet) ? 1 : 0
+
+                score = -negamax(child, key: childKey, depth: depth - 1 - reduction,
                                  alpha: -alpha - 1, beta: -alpha, ply: ply + 1, ctx: ctx)
-                if score > alpha && score < beta {
+                if reduction > 0 && score > alpha {       // reduced search looked good
+                    score = -negamax(child, key: childKey, depth: depth - 1,
+                                     alpha: -alpha - 1, beta: -alpha, ply: ply + 1, ctx: ctx)
+                }
+                if score > alpha && score < beta {        // raise → full-window re-search
                     score = -negamax(child, key: childKey, depth: depth - 1,
                                      alpha: -beta, beta: -alpha, ply: ply + 1, ctx: ctx)
                 }
             }
             ctx.rep.leave(childKey)
             searchedFirst = true
+            moveIndex += 1
 
             if score > best { best = score; bestMove = mv }
             if best > alpha { alpha = best }

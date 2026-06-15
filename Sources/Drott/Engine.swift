@@ -255,17 +255,34 @@ enum Herringbone {
 
     /// Pick a move from a result, occasionally choosing the second-best (when it
     /// is nearly as good) so play is not perfectly deterministic. A forced win is
-    /// always taken; a second-best that loses is never chosen.
-    static func pickMove(from r: SearchResult,
+    /// always taken; a second-best that loses is never chosen. When `board` is
+    /// given, a variety pick is rejected if it would hang the moved piece — the
+    /// scores can rate two moves equal when the alternative's refutation is just
+    /// past the search horizon, so this guard checks it statically.
+    static func pickMove(from r: SearchResult, on board: Board? = nil,
+                         allowVariety: Bool = true,
                          rng: () -> Double = { Double.random(in: 0..<1) }) -> Move? {
         guard let best = r.best else { return nil }
+        guard allowVariety else { return best }                // strongest setting: always best
         guard let second = r.secondBest else { return best }
         if r.score >= mateThreshold { return best }            // take the win
         if r.secondScore <= -mateThreshold { return best }     // 2nd is a loss
         if r.score - r.secondScore <= varietyMargin, rng() < varietyProbability {
+            if let board, hangsMovedPiece(second, on: board) { return best }
             return second
         }
         return best
+    }
+
+    /// True if, after `mv`, the opponent can win the just-moved piece on its
+    /// destination square (a profitable capture by Static Exchange Evaluation).
+    static func hangsMovedPiece(_ mv: Move, on board: Board) -> Bool {
+        let after = board.applying(mv)
+        guard after.winner == nil else { return false }   // a game-winning move never "hangs"
+        for cap in after.captureMoves() where cap.to == mv.to {
+            if staticExchangeEval(after, cap) > 0 { return true }
+        }
+        return false
     }
 
     // MARK: Root (principal-variation search, multi-line)

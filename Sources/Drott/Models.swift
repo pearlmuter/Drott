@@ -1377,7 +1377,9 @@ class GameState: ObservableObject {
         let start = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Engine.search(snapshot, history: pastBoards, timeLimit: budget)
-            let chosen = Engine.pickMove(from: result)
+            // The strongest setting (Hard, 10s) plays the best move deterministically;
+            // easier settings vary for non-determinism, guarded against hanging.
+            let chosen = Engine.pickMove(from: result, on: snapshot, allowVariety: budget < 10)
             let elapsed = Date().timeIntervalSince(start)
             if elapsed < minStep { Thread.sleep(forTimeInterval: minStep - elapsed) }
             // The engine's view of this position, from Red's perspective, for

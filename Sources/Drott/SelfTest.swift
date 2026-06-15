@@ -49,6 +49,7 @@ enum SelfTest {
         freeCapture()
         herringboneTrades()
         developmentPreferences()
+        hangingProbe()
         threefold()
         repetitionAwareEngine()
         depthCap()
@@ -256,6 +257,63 @@ enum SelfTest {
         let best = Engine.bestMove(for: lose, timeLimit: 0.4)
         check(best != Move(from: d4, to: d5, isCapture: true),
               "engine declines the losing Dwarf-for-pawn trade (got \(best.map { lose.notation(for: $0) } ?? "nil"))")
+    }
+
+    // The engine must not move a piece onto a square where the opponent wins it
+    // for free, when a safe alternative exists.
+    private static func hangingProbe() {
+        print("[hanging probe]")
+
+        // After `mv`, the opponent's best profit (SEE) for capturing the moved
+        // piece on its destination square.
+        func hangsAfter(_ board: Board, _ mv: Move) -> Int {
+            let after = board.applying(mv)
+            guard after.winner == nil else { return 0 }
+            var worst = 0
+            for cap in after.captureMoves() where cap.to == mv.to {
+                worst = max(worst, Engine.staticExchangeEval(after, cap))
+            }
+            return worst
+        }
+
+        func probe(_ name: String, _ b: Board, budget: Double = 2.0) {
+            let best = Engine.bestMove(for: b, timeLimit: budget)
+            let hung = best.map { hangsAfter(b, $0) } ?? 0
+            let note = best.map { b.notation(for: $0) } ?? "nil"
+            check(hung <= 0, "\(name): engine plays \(note) (hang=\(hung))")
+        }
+
+        // (1) A pawn that could advance onto a file raked by a Black bowman.
+        var p1 = Board.empty()
+        p1.put(.king, .red, Position(col: 0, row: 0))
+        p1.put(.king, .black, Position(col: 8, row: 8))
+        p1.put(.skjolding, .red, Position(col: 4, row: 1))   // E2
+        p1.put(.bowman, .black, Position(col: 4, row: 6))    // E7 rakes E6..E3
+        p1.sideToMove = .red
+        probe("pawn vs raking bowman", p1)
+
+        // (2) A dwarf that could step onto a square a Black pawn guards.
+        var p2 = Board.empty()
+        p2.put(.king, .red, Position(col: 0, row: 0))
+        p2.put(.king, .black, Position(col: 8, row: 8))
+        p2.put(.dwarf, .red, Position(col: 4, row: 2))       // E3
+        p2.put(.skjolding, .black, Position(col: 3, row: 5)) // D6 guards E5 (and C5)
+        p2.sideToMove = .red
+        probe("dwarf vs pawn-guarded square", p2)
+
+        // The variety pick must never hand the opponent a free piece: with a
+        // forced near-tie where the alternative hangs, it falls back to best.
+        var p3 = Board.empty()
+        p3.put(.king, .red, Position(col: 0, row: 0))
+        p3.put(.king, .black, Position(col: 8, row: 8))
+        p3.put(.dwarf, .red, Position(col: 4, row: 2))
+        p3.put(.skjolding, .black, Position(col: 3, row: 5))
+        p3.sideToMove = .red
+        let r = Engine.search(p3, timeLimit: 0.5)
+        // Force the variety branch (rng always 0) and require it not to hang.
+        let picked = Engine.pickMove(from: r, on: p3, allowVariety: true, rng: { 0 })
+        let pickedHang = picked.map { hangsAfter(p3, $0) } ?? 0
+        check(pickedHang <= 0, "variety pick never hangs the moved piece (hang=\(pickedHang))")
     }
 
     // Tier-specific development preferences in the static eval: minors hold the

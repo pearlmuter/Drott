@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         SelfTest.runIfRequested()      // exits the process when DROTT_SELFTEST=1
+        Corpus.exportIfRequested()     // exits the process when DROTT_DUMP_CORPUS=1
         AppIcon.exportIfRequested()    // exits the process when DROTT_MAKEICON=1
         NSApp.setActivationPolicy(.regular)
     }

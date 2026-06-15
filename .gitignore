@@ -4,3 +4,10 @@
 xcuserdata/
 .DS_Store
 Drott.app/
+
+# Python AlphaZero side
+python/.venv/
+python/__pycache__/
+# generated parity oracle (~33 MB); regenerate via DROTT_DUMP_CORPUS=1
+python/parity_corpus.json
+*.pyc

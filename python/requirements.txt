@@ -1,0 +1,12 @@
+# Drott AlphaZero training stack (Apple Silicon / MPS).
+# Phase 1 (rules port + parity oracle) needs NONE of these — it is pure stdlib.
+# These are for Phase 2+ (game adapter, NN, training, CoreML export).
+#
+# Install into a venv:
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+
+torch>=2.2            # MPS backend for Apple Silicon GPU training
+numpy>=1.26
+coremltools>=7.2      # PyTorch -> CoreML export for the shipped Swift app
+tqdm>=4.66            # progress bars in the self-play / training loops

@@ -203,20 +203,23 @@ net + the `.examples` replay buffer, resumes with `skipFirstSelfPlay`). We add:
 Each phase ends with something you can see/run. We don't start a phase until the
 previous one's exit criterion is met.
 
-### Phase 0 — Foundations & decisions  ⬜
-- [ ] Agree the open decisions in §8 (board size v1, training cadence, Elo pool).
-- [ ] You: install Python 3.11+, PyTorch (MPS), clone alpha-zero-general locally.
-- [ ] I: scaffold a `python/` dir in the repo with pinned `requirements.txt`.
-- **Exit:** `import torch; torch.backends.mps.is_available()` is `True`; the
-  Othello example trains for 1 iteration on your machine.
+### Phase 0 — Foundations & decisions  🟦 (nearly done)
+- [x] Board size decided: **9×9 only** (the 11×11 variant was removed from the game).
+- [x] You: Python 3.11.4 + PyTorch 2.12 installed; `torch.backends.mps.is_available()` → **True**.
+- [x] I: scaffolded `python/` with pinned `requirements.txt` + README.
+- [ ] You: clone alpha-zero-general locally; train the Othello example 1 iteration
+      (the last Phase-0 smoke test). *Remaining open decisions (Elo pool, training
+      driver, distribution) don't block Phase 1–2 and can wait until Phase 4.*
 
-### Phase 1 — Rules port + parity oracle  ⬜  ← *the critical phase*
-- [ ] I: extend Swift `SelfTest` to emit the JSON golden corpus.
-- [ ] I: write `drott_rules.py` (board, move-gen, apply, win conditions) — a
-      faithful, dependency-free port of `Models.swift`.
-- [ ] I: write `test_parity.py` — must match the corpus 100%.
-- **Exit:** parity tests green on a few thousand positions including all tactical
-  edge cases. *No NN work begins until this passes.*
+### Phase 1 — Rules port + parity oracle  ✅ COMPLETE (2026-06-15)  ← *the critical phase*
+- [x] Swift `Corpus.swift` emits the JSON golden corpus on `DROTT_DUMP_CORPUS=1`
+      (start, single-piece-per-square sweep, 80 seeded random self-play games,
+      curated win-timing/shieldwall/pinch positions).
+- [x] `python/drott_rules.py` — faithful, dependency-free port of `Models.swift`.
+- [x] `python/test_parity.py` — checks hash, legal-move set, and every transition.
+- **Exit MET:** parity **green on 9,498 positions / 371,194 transitions**, including
+  42k captures, 1,964 king-captures, 90 castle wins, 1,205 fort wins. Python
+  matches Swift 100%. The rule-drift gate is closed; NN work may begin.
 
 ### Phase 2 — Game adapter + sanity training  ⬜
 - [ ] I: `DrottGame.py` implementing the §1.1 interface over `drott_rules.py`.

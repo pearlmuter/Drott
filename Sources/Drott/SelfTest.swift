@@ -46,6 +46,8 @@ enum SelfTest {
         fortTiming()
         hunterBoxedIn()
         dwarfKnightLineOfSight()
+        swordShieldwall()
+        attackMapControl()
         freeCapture()
         herringboneTrades()
         developmentPreferences()
@@ -317,6 +319,64 @@ enum SelfTest {
             maxHang = max(maxHang, picked.map { hangsAfter(p3, $0) } ?? 0)
         }
         check(maxHang <= 0, "no variety pick across the pool hangs the moved piece (max=\(maxHang))")
+    }
+
+    // The Sword (elf) slides diagonally but cannot slip between two pieces that
+    // stand orthogonally on either side of a step (the shieldwall).
+    private static func swordShieldwall() {
+        print("[sword shieldwall]")
+        let d4 = Position(col: 3, row: 3)
+        let e5 = Position(col: 4, row: 4)
+        let f6 = Position(col: 5, row: 5)
+
+        // Both flanks of the D4→E5 step occupied → the NE diagonal is sealed.
+        var sealed = Board.empty()
+        sealed.put(.king, .red, Position(col: 0, row: 0))
+        sealed.put(.king, .black, Position(col: 8, row: 8))
+        sealed.put(.elf, .red, d4)
+        sealed.put(.skjolding, .red, Position(col: 4, row: 3))    // E4
+        sealed.put(.skjolding, .black, Position(col: 3, row: 4))  // D5
+        let s1 = sealed.piece(at: d4)!
+        let (m1, a1) = sealed.validDestinations(for: s1)
+        check(!m1.contains(e5) && !a1.contains(e5) && !m1.contains(f6),
+              "Sword cannot slip NE through a shieldwall (E4+D5 occupied)")
+
+        // Only one flank occupied → the Sword slides through normally.
+        var open = Board.empty()
+        open.put(.king, .red, Position(col: 0, row: 0))
+        open.put(.king, .black, Position(col: 8, row: 8))
+        open.put(.elf, .red, d4)
+        open.put(.skjolding, .red, Position(col: 4, row: 3))      // E4 only
+        let s2 = open.piece(at: d4)!
+        let (m2, _) = open.validDestinations(for: s2)
+        check(m2.contains(e5) && m2.contains(f6),
+              "Sword slides NE when only one flank is occupied")
+    }
+
+    // Net square control: +1 per Red attacker, −1 per Black; both sides cancel.
+    private static func attackMapControl() {
+        print("[attack map]")
+        func idx(_ c: Int, _ r: Int) -> Int { c + r * 9 }
+
+        var b = Board.empty()
+        b.put(.king, .red, Position(col: 0, row: 0))
+        b.put(.king, .black, Position(col: 8, row: 8))
+        b.put(.wolf, .red, Position(col: 4, row: 4))     // E5, slides orthogonally ≤3
+        var net = b.attackControl()
+        check(net[idx(4, 5)] == 1, "one red attacker tints +1 (got \(net[idx(4, 5)]))")   // E6
+
+        // A Black wolf on E1 contests E2–E4 with the red wolf → net 0.
+        b.put(.wolf, .black, Position(col: 4, row: 0))   // E1
+        net = b.attackControl()
+        check(net[idx(4, 2)] == 0, "a square attacked by both sides is neutral (got \(net[idx(4, 2)]))")
+
+        // Two red attackers on one square stack to +2.
+        var c = Board.empty()
+        c.put(.king, .red, Position(col: 0, row: 0))
+        c.put(.king, .black, Position(col: 8, row: 8))
+        c.put(.wolf, .red, Position(col: 4, row: 4))     // E5 → attacks E4
+        c.put(.wolf, .red, Position(col: 3, row: 3))     // D4 → attacks E4
+        check(c.attackControl()[idx(4, 3)] == 2, "two red attackers stack to +2")
     }
 
     // A game can be exported to text and re-imported to the same position, and an

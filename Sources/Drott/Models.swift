@@ -261,6 +261,19 @@ struct Board {
         return result
     }
 
+    /// Net control of each square: +1 for every Red piece that can move/capture
+    /// onto it, −1 for every Black piece. Indexed `col + row*N`. Used by the
+    /// attack-map overlay (ignores whose turn it is).
+    func attackControl() -> [Int] {
+        var net = [Int](repeating: 0, count: N * N)
+        for sq in squares {
+            guard let p = sq else { continue }
+            let delta = p.side == .red ? 1 : -1
+            generateMoves(for: p) { dest, _ in net[index(dest)] += delta }
+        }
+        return net
+    }
+
     // MARK: Apply
     //
     // Returns the board after `move`. Win conditions:
@@ -505,7 +518,13 @@ struct Board {
         for (dc, dr) in [(0,1),(0,-1),(1,0),(-1,0)] { _ = add(p.pos.col + dc, p.pos.row + dr) }
         for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
             var col = p.pos.col + dc, row = p.pos.row + dr
-            for _ in 1...4 { guard add(col, row) else { break }; col += dc; row += dr }
+            for _ in 1...4 {
+                // Shieldwall: a diagonal step cannot slip between two pieces that
+                // stand orthogonally on either side of it.
+                if occupied(col, row - dr) && occupied(col - dc, row) { break }
+                guard add(col, row) else { break }
+                col += dc; row += dr
+            }
         }
     }
 
@@ -665,6 +684,8 @@ class GameState: ObservableObject {
     @Published var phase: Phase = .setup
     /// The eval graph is hidden until the deep "Engine analysis" is requested.
     @Published var showGraph = false
+    /// When on, the board tints each square by net control (red vs black attackers).
+    @Published var showAttackMap = false
 
     /// The side that resigned (the other side wins), or nil.
     @Published var concededLoser: Side? = nil
@@ -705,19 +726,19 @@ class GameState: ObservableObject {
     @Published var analysisTurn: Side = .red    // side to move in the analysed pos
     private var analysisGen = 0
     private let analysisQueue = DispatchQueue(label: "drott.analysis", qos: .userInitiated)
-    /// The live eval is searched as deeply as the playing engine so it is stable
-    /// (a shallow eval swings wildly between transient threats).
-    private let analysisTime = 1.2
+    /// A quick read for the live eval bar while scrubbing — kept short so paging
+    /// through positions stays responsive. The authoritative review is the deep
+    /// "Engine analysis" below, which searches at full playing strength.
+    private let analysisTime = 1.5
 
     // Evaluation graph: Red-perspective eval per ply (index aligned with
     // `history`; nil = unknown). Populated live during the game with the engine's
     // own contemporary evaluation, then optionally overwritten one position at a
-    // time by a deeper (5s, depth ≤22) re-analysis.
+    // time by the deep re-analysis (at the current strength setting, depth ≤22).
     @Published var graphScores: [Int?] = [nil]
     @Published var deepAnalyzing = false
     @Published var deepProgress = 0             // positions deep-analysed so far
     @Published var deepTotal = 0
-    @Published var deepTimePerMove: Double = 5.0
     private var deepGen = 0
     private let deepQueue = DispatchQueue(label: "drott.deepanalysis", qos: .userInitiated)
     static let analysisDepthCap = 22
@@ -1162,9 +1183,12 @@ class GameState: ObservableObject {
 
     // MARK: Deep post-game analysis (the eval graph)
 
-    /// Re-analyse every position in the game with a deeper search (5s, depth ≤22)
-    /// and overwrite the graph one position at a time, replacing the contemporary
-    /// in-game evaluations as it goes.
+    /// Re-analyse every position in the game at the current playing strength
+    /// (`thinkTime`, depth ≤22) and overwrite the graph one position at a time,
+    /// replacing the contemporary in-game evaluations as it goes. Searching at the
+    /// play strength keeps the review consistent with how the game was played —
+    /// the analysis is exactly as strong as the engine, never out-analysing a game
+    /// it played at the same setting.
     func analyzeGame() {
         guard phase == .analysis, history.count > 1 else { return }
         deepGen += 1
@@ -1172,7 +1196,7 @@ class GameState: ObservableObject {
         let boards = history
         let n = boards.count
         let drawAt = drawPly
-        let budget = deepTimePerMove
+        let budget = thinkTime
 
         // Keep the contemporary values on screen; they are replaced in place.
         if graphScores.count != n { graphScores = Array(repeating: nil, count: n) }

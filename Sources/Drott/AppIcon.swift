@@ -18,41 +18,49 @@ enum AppIcon {
 
         let rect = NSRect(x: 0, y: 0, width: size, height: size)
 
-        // Rounded tile with the dark→wood gradient of the board.
+        // Rounded tile in the board's square colour.
         let tile = NSBezierPath(roundedRect: rect, xRadius: size * 0.22, yRadius: size * 0.22)
         tile.addClip()
-        let gradient = NSGradient(colors: [
-            NSColor(red: 0.16, green: 0.13, blue: 0.10, alpha: 1),
-            NSColor(red: 0.55, green: 0.42, blue: 0.28, alpha: 1),
-        ])
-        gradient?.draw(in: rect, angle: -90)
+        NSColor(red: 0.94, green: 0.90, blue: 0.81, alpha: 1).setFill()
+        rect.fill()
 
-        // Pale beige disc behind the king (echoes the piece tokens on the board).
+        // Warm off-white token disc, like a red piece on the board.
         let inset = size * 0.13
         let disc = NSBezierPath(ovalIn: rect.insetBy(dx: inset, dy: inset))
-        NSColor(red: 0.94, green: 0.90, blue: 0.81, alpha: 1).setFill()
+        NSColor(red: 1.00, green: 0.97, blue: 0.96, alpha: 1).setFill()
         disc.fill()
-        NSColor(red: 0.35, green: 0.22, blue: 0.08, alpha: 0.25).setStroke()
+        NSColor(red: 0.35, green: 0.22, blue: 0.08, alpha: 0.22).setStroke()
         disc.lineWidth = size * 0.012
         disc.stroke()
 
-        // The King, centred.
-        let k = size * 0.58
+        // The new King symbol, centred.
+        let k = size * 0.46
         king.draw(in: NSRect(x: (size - k) / 2, y: (size - k) / 2, width: k, height: k),
                   from: .zero, operation: .sourceOver, fraction: 1)
 
         return image
     }
 
+    /// The new king symbol (king.svg), tinted the deep carmine of the red pieces.
     private static func loadKing() -> NSImage? {
+        func tinted(_ url: URL) -> NSImage? {
+            guard let raw = NSImage(contentsOf: url) else { return nil }
+            let size = raw.size
+            return NSImage(size: size, flipped: false) { rect in
+                raw.draw(in: rect)
+                NSColor(red: 0.75, green: 0.11, blue: 0.09, alpha: 1).set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+        }
+        if let url = Bundle.module.url(forResource: "king", withExtension: "svg"),
+           let img = tinted(url) { return img }
         if let resURL = Bundle.main.resourceURL {
             let url = resURL
                 .appendingPathComponent("Drott_Drott.bundle")
-                .appendingPathComponent("red_king.png")
-            if let img = NSImage(contentsOf: url) { return img }
+                .appendingPathComponent("king.svg")
+            if let img = tinted(url) { return img }
         }
-        if let url = Bundle.module.url(forResource: "red_king", withExtension: "png"),
-           let img = NSImage(contentsOf: url) { return img }
         return nil
     }
 

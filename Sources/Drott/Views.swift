@@ -74,13 +74,13 @@ struct GameGraphPanel: View {
                 if game.deepAnalyzing {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
-                        Text("\(game.deepProgress)/\(game.deepTotal) · \(GameGraphPanel.deepSeconds(game.deepTimePerMove))s/move")
+                        Text("\(game.deepProgress)/\(game.deepTotal) · \(GameGraphPanel.deepSeconds(game.thinkTime))s/move")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                         Button("Stop") { game.cancelAnalysis() }
                             .controlSize(.small)
                     }
                 } else {
-                    Text("deep \(GameGraphPanel.deepSeconds(game.deepTimePerMove))s/move · depth ≤\(GameState.analysisDepthCap)")
+                    Text("deep \(GameGraphPanel.deepSeconds(game.thinkTime))s/move · depth ≤\(GameState.analysisDepthCap)")
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
             }
@@ -158,6 +158,12 @@ struct SidePanel: View {
                 }
             }
             .controlSize(.small)
+
+            Toggle(isOn: $game.showAttackMap) {
+                Text("Attacked squares").font(.system(size: 11))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
 
             // Tab picker
             Picker("", selection: $tab) {
@@ -730,6 +736,7 @@ struct BoardView: View {
         let redFort = board.redFortSquares
         let blackFort = board.blackFortSquares
         let lineHL = game.lineHighlight
+        let control = game.showAttackMap ? board.attackControl() : nil
         return VStack(spacing: 0) {
             ForEach((0..<n).reversed(), id: \.self) { row in
                 HStack(spacing: 0) {
@@ -746,7 +753,8 @@ struct BoardView: View {
                             isOnCastle:     pos == castlePos,
                             isInCastleZone: Position.isCastleZone(pos, N: n),
                             isOnFort:       redFort.contains(pos) || blackFort.contains(pos),
-                            isLineHighlight: lineHL.map { $0.from == pos || $0.to == pos } ?? false
+                            isLineHighlight: lineHL.map { $0.from == pos || $0.to == pos } ?? false,
+                            control:        control?[col + row * n] ?? 0
                         )
                         .onTapGesture { game.tap(pos) }
                         .gesture(
@@ -921,6 +929,8 @@ struct SquareView: View {
     var isInCastleZone: Bool = false
     var isOnFort: Bool = false
     var isLineHighlight: Bool = false
+    /// Net attack control for the attack-map overlay: >0 Red, <0 Black, 0 neutral.
+    var control: Int = 0
 
     private static let normalBeige  = Color(red: 0.94, green: 0.90, blue: 0.81)
     private static let fortBeige    = Color(red: 0.86, green: 0.80, blue: 0.69)
@@ -950,6 +960,16 @@ struct SquareView: View {
                 if isOnFort {
                     fortDiagonals
                         .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+
+                // Attack map: tint by net control (Red vs Black attackers),
+                // stronger up to ±3.
+                if control != 0 {
+                    let tint = control > 0
+                        ? Color(red: 0.80, green: 0.12, blue: 0.10)   // Red controls
+                        : Color(red: 0.13, green: 0.22, blue: 0.55)   // Black controls
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(tint.opacity(Double(min(abs(control), 3)) * 0.13))
                 }
 
                 // Last move played (from & to squares): soft yellow wash.

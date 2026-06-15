@@ -409,6 +409,34 @@ struct Board {
         return (a && b) || (a && cc) || (b && u)
     }
 
+    // Line-of-sight for a "narrow" leap: one column to the `side` (|dx| == 1) and
+    // `dist` squares `fwd` (dy == dist, 1...3). True iff a straight line can be
+    // drawn from somewhere inside the origin square to the target without crossing
+    // an occupied square or squeezing between two diagonally-adjacent pieces. The
+    // line crosses from the origin column into the target column at some height; a
+    // "pivot" j means it crosses between forward-step j and j+1, so it passes the
+    // origin-column cells 1…j and the target-column cells j…dist-1. The leap is
+    // clear if any pivot leaves both of those runs empty. (dist 1 reduces to the
+    // shieldwall; dist 2 to the knight corner-pinch.)
+    private func narrowLeapClear(_ c: Int, _ r: Int, side: Int, fwd: Int, dist: Int) -> Bool {
+        for j in 0...dist {
+            var clear = true
+            var k = 1
+            while k <= j {                       // origin-column cells below the crossing
+                if occupied(c, r + k * fwd) { clear = false; break }
+                k += 1
+            }
+            if !clear { continue }
+            k = j
+            while k <= dist - 1 {                // target-column cells above the crossing
+                if occupied(c + side, r + k * fwd) { clear = false; break }
+                k += 1
+            }
+            if clear { return true }
+        }
+        return false
+    }
+
     // Skjolding: 2 forward (if 1-forward clear), diagonal forward ×2, 1 backward.
     // Shieldwall: diagonal blocked when both adjacent orthogonals occupied (any piece).
     private func skjoldingMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
@@ -433,7 +461,8 @@ struct Board {
         add(c, r - fwd)
     }
 
-    // Berserker: 3 forward lanes ×3 steps each, 1 sideways. Shieldwall at lane entry.
+    // Berserker: straight forward up to 3 (a slide), the two forward-diagonal
+    // columns up to 3 (leaps, each gated by line-of-sight), and 1 sideways.
     private func berserkerMoves(_ p: Piece, _ emit: (Position, Bool) -> Void) {
         let fwd = p.side == .red ? 1 : -1
         let c = p.pos.col, r = p.pos.row
@@ -448,11 +477,20 @@ struct Board {
             emit(pos, false); return true
         }
 
+        // Straight ahead is a slide — it stops at the first piece.
         for step in 1...3 { guard add(c, r + step * fwd) else { break } }
+
+        // The forward-diagonal columns are leaps: a square one to the side and up
+        // to three forward is reachable whenever a straight line threads to it
+        // (line-of-sight), so the berserker can pass a single blocker but never
+        // squeeze between two diagonally-adjacent pieces.
         for dc in [-1, 1] {
-            if occupied(c, r + fwd) && occupied(c + dc, r) { continue }
-            for step in 1...3 { guard add(c + dc, r + step * fwd) else { break } }
+            for step in 1...3 {
+                guard narrowLeapClear(c, r, side: dc, fwd: fwd, dist: step) else { continue }
+                _ = add(c + dc, r + step * fwd)
+            }
         }
+
         for dc in [-1, 1] { _ = add(c + dc, r) }
     }
 
@@ -561,8 +599,9 @@ struct Board {
             for step in 1...2 { guard add(c + dc*step, r + dr*step) else { break } }
         }
         for (dc, dr) in [(1,1),(1,-1),(-1,1),(-1,-1)] {
-            if occupied(c, r + dr) && occupied(c + dc, r) { continue }
-            if occupied(c + dc, r + dr) { continue }
+            if occupied(c, r + dr) && occupied(c + dc, r) { continue }       // origin-corner pinch
+            if occupied(c + dc, r + dr) { continue }                         // midpoint on the line
+            if occupied(c + dc, r + 2*dr) && occupied(c + 2*dc, r + dr) { continue }  // target-corner pinch
             _ = add(c + dc*2, r + dr*2)
         }
         for (dc, dr) in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)] {

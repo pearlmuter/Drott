@@ -48,6 +48,8 @@ enum SelfTest {
         dwarfKnightLineOfSight()
         swordShieldwall()
         spearmanRangeTwo()
+        berserkerLineOfSight()
+        dwarfDiagonalTargetPinch()
         attackMapControl()
         sampleBerserkerProbe()
         freeCapture()
@@ -459,6 +461,84 @@ enum SelfTest {
         let (m3, _) = blockedR.validDestinations(for: sp3)
         check( m3.contains(e5), "spearman can reach E5 (range-1 right)")
         check(!m3.contains(f6), "spearman blocked at F6 by secondary shieldwall (E6+F5)")
+    }
+
+    // The berserker's forward-diagonal squares are leaps governed by line-of-sight:
+    // a square two forward and one to the side is reachable even with the square
+    // directly between occupied, as long as a straight line can thread to it — but
+    // never by squeezing between two diagonally-adjacent pieces.
+    private static func berserkerLineOfSight() {
+        print("[berserker line-of-sight]")
+        let d2 = Position(col: 3, row: 1)
+        let e3 = Position(col: 4, row: 2)   // diagonal step (one fwd, one side)
+        let e4 = Position(col: 4, row: 3)   // two fwd, one side  (the reported move)
+        let e5 = Position(col: 4, row: 4)   // three fwd, one side
+        let d3 = Position(col: 3, row: 2)
+        let d4 = Position(col: 3, row: 3)
+
+        // E3 occupied by a friendly piece, the D-file clear: the berserker threads
+        // up the D-file and across to E4 / E5 — it leaps the single blocker.
+        var leap = Board.empty()
+        leap.put(.king, .red,   Position(col: 0, row: 0))
+        leap.put(.king, .black, Position(col: 8, row: 8))
+        leap.put(.berserker, .red, d2)
+        leap.put(.skjolding, .red, e3)          // the square two-forward path would slide through
+        let b1 = leap.piece(at: d2)!
+        let (m1, _) = leap.validDestinations(for: b1)
+        check(m1.contains(e4), "berserker reaches E4 (2 fwd, 1 side) past a single blocker on E3")
+        check(m1.contains(e5), "berserker reaches E5 (3 fwd, 1 side) past a single blocker on E3")
+        check(!m1.contains(e3), "berserker cannot land on the friendly piece at E3")
+
+        // Now pinch the E4 leap between two diagonally-adjacent pieces: E3 and D4.
+        // The line from D2 to E4 must squeeze through their shared corner → blocked.
+        var pinch = Board.empty()
+        pinch.put(.king, .red,   Position(col: 0, row: 0))
+        pinch.put(.king, .black, Position(col: 8, row: 8))
+        pinch.put(.berserker, .red, d2)
+        pinch.put(.skjolding, .red, e3)
+        pinch.put(.skjolding, .red, d4)
+        let b2 = pinch.piece(at: d2)!
+        let (m2, _) = pinch.validDestinations(for: b2)
+        check(!m2.contains(e4), "berserker blocked from E4 when E3+D4 pinch the corner diagonally")
+
+        // The straight-ahead column stays a true slide — a piece on D3 blocks D4.
+        var slide = Board.empty()
+        slide.put(.king, .red,   Position(col: 0, row: 0))
+        slide.put(.king, .black, Position(col: 8, row: 8))
+        slide.put(.berserker, .red, d2)
+        slide.put(.skjolding, .red, d3)
+        let b3 = slide.piece(at: d2)!
+        let (m3, _) = slide.validDestinations(for: b3)
+        check(!m3.contains(d4), "berserker straight-ahead is a slide — D3 blocks D4 (no leaping)")
+    }
+
+    // The dwarf's diagonal-2 leap is blocked by a pair of diagonally-adjacent
+    // pieces pinching the TARGET corner, not only the origin corner / midpoint.
+    private static func dwarfDiagonalTargetPinch() {
+        print("[dwarf diagonal target pinch]")
+        let b2 = Position(col: 1, row: 1)
+        let d4 = Position(col: 3, row: 3)   // target (2 diagonal steps NE)
+        let c3 = Position(col: 2, row: 2)   // midpoint on the line (kept clear)
+        let c4 = Position(col: 2, row: 3)   // target-corner pinch
+        let d3 = Position(col: 3, row: 2)   // target-corner pinch
+
+        var pinch = Board.empty()
+        pinch.put(.king, .red,   Position(col: 0, row: 0))
+        pinch.put(.king, .black, Position(col: 8, row: 8))
+        pinch.put(.dwarf, .red, b2)
+        pinch.put(.skjolding, .black, c4)
+        pinch.put(.skjolding, .black, d3)
+        let dw = pinch.piece(at: b2)!
+        let (m1, _) = pinch.validDestinations(for: dw)
+        check(pinch.piece(at: c3) == nil, "midpoint C3 is clear in the dwarf pinch setup")
+        check(!m1.contains(d4), "dwarf blocked from D4 when C4+D3 pinch the target corner")
+
+        // Remove one pinch piece → the diagonal-2 leap opens up.
+        var open = pinch
+        open.squares[open.index(d3)] = nil
+        let dw2 = open.piece(at: b2)!
+        let (m2, _) = open.validDestinations(for: dw2)
+        check(m2.contains(d4), "dwarf reaches D4 once the target-corner pinch is broken")
     }
 
     // Net square control: +1 per Red attacker, −1 per Black; both sides cancel.

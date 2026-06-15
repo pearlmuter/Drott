@@ -11,3 +11,9 @@ python/__pycache__/
 # generated parity oracle (~33 MB); regenerate via DROTT_DUMP_CORPUS=1
 python/parity_corpus.json
 *.pyc
+
+# third-party AlphaZero framework (local dev dependency; not our code)
+alpha-zero-general-master/
+python/temp/          # training checkpoints
+*.pth.tar
+*.examples

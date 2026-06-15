@@ -1,19 +1,24 @@
 import Foundation
 
-// MARK: - Drott Engine
+// MARK: - Herringbone — the classical Drott engine
 //
-// A native Swift game-search engine for Drott. It reuses `Board` (the single
-// source of truth for the rules) and applies the standard chess-engine search
-// techniques — negamax with alpha-beta pruning, iterative deepening, and a
-// capture-only quiescence search — paired with a Drott-specific evaluation.
+// "Herringbone" (HR) is Drott's hand-written search engine, named in the
+// tradition of Stockfish. It reuses `Board` (the single source of truth for the
+// rules) and applies the standard chess-engine toolkit — negamax with alpha-beta
+// pruning, iterative deepening with aspiration windows, a transposition table,
+// killer/history move ordering, principal-variation search, late-move
+// reductions, and a Static-Exchange-Evaluation-guided quiescence search — paired
+// with a Drott-specific evaluation.
 //
 // The three win conditions it understands:
 //   1. capture the enemy king,
-//   2. hold your king on the castle (F6) until your next turn,
+//   2. hold your king on the castle until your next turn,
 //   3. occupy the enemy fort while they hold none of their own.
 //
-// Piece value is *mobility*: a piece is worth roughly the number of squares it
-// can currently reach. Active pieces are valuable; boxed-in pieces are not.
+// Piece value is a fixed three-tier scale (pawn 1 / minor 2 / middle 3 /
+// major 5, ×100). Static Exchange Evaluation keeps the engine from initiating
+// losing trades or leaving pieces hanging, and a center-control term — weighted
+// toward pawns and minor pieces — rewards contesting the middle of the board.
 
 struct SearchResult {
     var best: Move?
@@ -59,7 +64,7 @@ struct TTEntry {
 }
 
 /// Per-search mutable state: transposition table, killer moves, history
-/// heuristic, repetition tracker, and the deadline. One per `Engine.search`.
+/// heuristic, repetition tracker, and the deadline. One per `Herringbone.search`.
 final class SearchContext {
     let deadline: Date
     let rep: Repetition
@@ -75,14 +80,14 @@ final class SearchContext {
         self.rep = rep
         self.boardN = boardN
         self.boardSq = boardN * boardN
-        killers = Array(repeating: nil, count: (Engine.maxDepth + 2) * 2)
+        killers = Array(repeating: nil, count: (Herringbone.maxDepth + 2) * 2)
         history = Array(repeating: 0, count: boardSq * boardSq)
         tt.reserveCapacity(1 << 13)
     }
 
-    /// Amortised deadline check. The mobility eval is heavy, so even ~100 nodes
-    /// can take a meaningful fraction of a short budget — check often enough that
-    /// a 0.03s self-play search doesn't overshoot into the hundreds of ms.
+    /// Amortised deadline check. Even a cheap eval over many nodes can overshoot
+    /// a short budget — check often enough that a 0.03s self-play search doesn't
+    /// run into the hundreds of ms.
     private var lastTimedOut = false
     /// Sticky "deadline has passed" flag, read without side effects.
     var isExpired: Bool { lastTimedOut }
@@ -116,40 +121,62 @@ final class SearchContext {
     }
 }
 
-enum Engine {
+enum Herringbone {
+
+    static let displayName = "Herringbone"
+    static let shortName = "HR"
 
     // Large terminal score; kept well below Int.max so ±mate arithmetic is safe.
     static let mate = 1_000_000
     static let infinity = 2_000_000
     static let maxDepth = 32
 
-    /// Fixed material value per piece type = the squares it can reach on an open
-    /// board (its "characteristic" mobility), scaled ×25 so a Skjolding ≈ 100
-    /// (one "pawn"). This is stable, so a capture is always worth the captured
-    /// piece's real value even when it is momentarily boxed in.
+    // MARK: Piece values — three tiers (×100)
+    //
+    //   Pawn (Skjolding) = 1
+    //   Minor  (Spearman, Bowman, Berserker) = 2
+    //   Middle (Wolf, Hunter)                = 3
+    //   Major  (Dwarf, Elf)                  = 5
+    //
+    // The king carries no material value: its loss is the terminal mate score.
+
     static func baseValue(_ t: PieceType) -> Int {
         switch t {
-        case .king:      return 0     // its loss is the terminal mate score
-        case .skjolding: return 100   //  4 squares
-        case .bowman:    return 150   //  6
-        case .spearman:  return 175   //  7
-        case .berserker: return 275   // 11
-        case .hunter:    return 300   // 12
-        case .wolf:      return 300   // 12
-        case .elf:       return 500   // 20
-        case .dwarf:     return 500   // 20
+        case .king:                          return 0
+        case .skjolding:                     return 100   // pawn
+        case .spearman, .bowman, .berserker: return 200   // minor
+        case .wolf, .hunter:                 return 300   // middle
+        case .dwarf, .elf:                   return 500   // major
         }
     }
 
-    /// Bonus per square a piece can reach *right now* (activity on top of the
-    /// fixed base value). Small, so it differentiates active vs. passive pieces
-    /// without swamping material.
-    static let mobilityWeight = 3
+    /// Piece value as seen by Static Exchange Evaluation. The king is given a
+    /// huge value so it is always the attacker of last resort and losing it
+    /// dominates any exchange (capturing it actually ends the game).
+    static func seeValue(_ t: PieceType) -> Int {
+        t == .king ? 10_000 : baseValue(t)
+    }
+
+    /// Center-control weight per tier. Contesting the middle of the board is the
+    /// job of pawns and minor pieces, so they earn the most for being central;
+    /// the heavier pieces earn little (we don't want them clogging the center).
+    private static func centerWeight(_ t: PieceType) -> Int {
+        switch t {
+        case .skjolding:                     return 6
+        case .spearman, .bowman, .berserker: return 5
+        case .wolf, .hunter:                 return 2
+        case .dwarf, .elf:                   return 1
+        case .king:                          return 0   // the king wants the castle, handled below
+        }
+    }
 
     // How often, and within what margin, the engine plays the second-best move
     // instead of the best — just enough to break determinism without blundering.
     static let varietyProbability = 0.30
     static let varietyMargin = 30          // in eval units (~0.3 "pawns")
+
+    // Aspiration window half-width (eval units) for iterative deepening.
+    static let aspirationWindow = 50
 
     // Scores at/above this magnitude are "mate" scores (win in N).
     static var mateThreshold: Int { mate - maxDepth - 1 }
@@ -158,8 +185,9 @@ enum Engine {
     // MARK: Public entry
 
     /// Full multi-line search: best and second-best root moves with their
-    /// scores, plus the depth reached, via iterative deepening + a transposition
-    /// table, killer/history move ordering, and principal-variation search.
+    /// scores, plus the depth reached, via iterative deepening with aspiration
+    /// windows + a transposition table, killer/history move ordering, and
+    /// principal-variation search.
     ///
     /// `history` is the sequence of real positions already played (ending at
     /// `board`); the engine uses it to score repetition draws correctly.
@@ -181,8 +209,26 @@ enum Engine {
                                   score: -infinity, secondScore: -infinity, depth: 0)
 
         var depth = 1
+        var prevScore = 0
         while depth <= min(depthLimit, maxDepth) {
-            let iter = searchRoot(board, depth: depth, ordering: ordering, ctx: ctx)
+            // Aspiration window: assume the score lands near the last iteration's
+            // and search a narrow window first. A fail-high/low triggers a full
+            // re-search. Cheap early depths just use the full window.
+            var alpha = -infinity, beta = infinity
+            if depth >= 4 && !isMateScore(prevScore) {
+                alpha = prevScore - aspirationWindow
+                beta  = prevScore + aspirationWindow
+            }
+
+            var iter = searchRoot(board, depth: depth, ordering: ordering,
+                                  ctx: ctx, alpha: alpha, beta: beta)
+            // Re-search at the full window if the result fell outside the
+            // aspiration window (its score and second-best are then unreliable).
+            if iter.completed, alpha != -infinity || beta != infinity,
+               iter.bestScore <= alpha || iter.bestScore >= beta {
+                iter = searchRoot(board, depth: depth, ordering: ordering,
+                                  ctx: ctx, alpha: -infinity, beta: infinity)
+            }
             guard iter.completed else { break }   // ran out of time mid-iteration
 
             result.best = iter.best
@@ -190,6 +236,7 @@ enum Engine {
             result.secondBest = iter.second
             result.secondScore = iter.secondScore
             result.depth = depth
+            prevScore = iter.bestScore
 
             ordering = iter.ordering               // best-first next iteration
             if isMateScore(iter.bestScore) && iter.bestScore > 0 { break }  // forced win
@@ -229,10 +276,9 @@ enum Engine {
         var completed: Bool
     }
 
-    private static func searchRoot(_ board: Board, depth: Int,
-                                   ordering: [Move], ctx: SearchContext) -> RootIteration {
-        var alpha = -infinity
-        let beta = infinity
+    private static func searchRoot(_ board: Board, depth: Int, ordering: [Move],
+                                   ctx: SearchContext, alpha alpha0: Int, beta: Int) -> RootIteration {
+        var alpha = alpha0
         var scored: [(move: Move, score: Int)] = []
         scored.reserveCapacity(ordering.count)
         var best = ordering[0], bestScore = -infinity
@@ -252,7 +298,7 @@ enum Engine {
             } else {
                 score = -negamax(child, key: key, depth: depth - 1,
                                  alpha: -alpha - 1, beta: -alpha, ply: 1, ctx: ctx)
-                if score > alpha {   // promising — re-search with a full window
+                if score > alpha && score < beta {   // promising — re-search with a full window
                     score = -negamax(child, key: key, depth: depth - 1,
                                      alpha: -beta, beta: -alpha, ply: 1, ctx: ctx)
                 }
@@ -376,7 +422,9 @@ enum Engine {
     //
     // Extends the search along captures only, so the static evaluation is never
     // applied in the middle of an unresolved exchange (the "horizon effect").
-    // Critical here because capturing the king ends the game immediately.
+    // Critical here because capturing the king ends the game immediately. Static
+    // Exchange Evaluation prunes captures that lose material outright, which both
+    // saves nodes and stops the engine from initiating bad trades.
 
     private static func quiesce(_ board: Board, alpha: Int, beta: Int,
                                 ply: Int, ctx: SearchContext) -> Int {
@@ -392,6 +440,14 @@ enum Engine {
 
         for mv in orderMoves(board.captureMoves(), board: board, ctx: ctx, ply: ply, ttMove: nil) {
             if ctx.timedOut() { break }
+            // Skip captures that lose material on the exchange — except a king
+            // capture (game-ending) or taking a piece that defends its own fort
+            // (a win-condition tactic, not a material one).
+            if let victim = board.piece(at: mv.to), victim.type != .king,
+               !board.isFort(mv.to, for: victim.side),
+               staticExchangeEval(board, mv) < 0 {
+                continue
+            }
             let child = board.applying(mv)
             let score = -quiesce(child, alpha: -beta, beta: -alpha, ply: ply + 1, ctx: ctx)
             if score >= beta { return beta }
@@ -400,20 +456,83 @@ enum Engine {
         return alpha
     }
 
+    // MARK: Static Exchange Evaluation
+    //
+    // Net material (in eval units) the side to move gains by initiating capture
+    // `mv`, assuming both sides keep recapturing on the target square with their
+    // least valuable attacker. Negative = the capture loses material. Attackers
+    // are found by running the real movement rules over a mutated board copy, so
+    // sliders that are revealed or blocked mid-exchange are handled correctly.
+
+    static func staticExchangeEval(_ board: Board, _ mv: Move) -> Int {
+        guard let victim = board.piece(at: mv.to),
+              let attacker = board.piece(at: mv.from) else { return 0 }
+
+        var b = board
+        let to = mv.to
+        var gain = [seeValue(victim.type)]          // the initial capture's spoils
+
+        // The attacker now sits on `to`; vacate its origin (may reveal X-rays).
+        b.squares[b.index(to)] = Piece(type: attacker.type, side: attacker.side, pos: to)
+        b.squares[b.index(mv.from)] = nil
+        var onSquare = seeValue(attacker.type)       // value now standing on `to`
+        var side = attacker.side.other
+        var d = 0
+
+        while let from = cheapestAttacker(of: to, by: side, on: b) {
+            d += 1
+            gain.append(onSquare - gain[d - 1])
+            if max(-gain[d - 1], gain[d]) < 0 { break }   // a side won't enter a losing exchange
+            let p = b.piece(at: from)!
+            b.squares[b.index(to)] = Piece(type: p.type, side: p.side, pos: to)
+            b.squares[b.index(from)] = nil
+            onSquare = seeValue(p.type)
+            side = side.other
+        }
+
+        // Minimax the exchange back to the root: at each step a side takes the
+        // better of standing pat or continuing the capture.
+        while d > 0 {
+            gain[d - 1] = -max(-gain[d - 1], gain[d])
+            d -= 1
+        }
+        return gain[0]
+    }
+
+    /// The least valuable piece of `side` that can capture onto `to` on board `b`.
+    private static func cheapestAttacker(of to: Position, by side: Side, on b: Board) -> Position? {
+        var best: Position? = nil
+        var bestVal = Int.max
+        for sq in b.squares {
+            guard let p = sq, p.side == side else { continue }
+            let v = seeValue(p.type)
+            if v >= bestVal { continue }              // can't beat the cheapest found so far
+            var hits = false
+            b.generateMoves(for: p) { dest, isCap in
+                if isCap && dest == to { hits = true }
+            }
+            if hits { best = p.pos; bestVal = v }
+        }
+        return best
+    }
+
     // MARK: Move ordering
     //
-    // Ordering quality drives pruning. Priority: TT move, then captures by victim
-    // value (MVV), then the two killer moves for this ply, then quiet moves by
-    // the history-heuristic score.
+    // Ordering quality drives pruning. Priority: TT move, then winning/equal
+    // captures by victim value (MVV-LVA), then the two killer moves, then quiet
+    // moves by the history heuristic — and finally, below everything, captures
+    // that SEE judges to lose material.
 
     private static func orderMoves(_ moves: [Move], board: Board, ctx: SearchContext,
                                    ply: Int, ttMove: Move?) -> [Move] {
         let k0 = ctx.killer(ply, 0)
         let k1 = ctx.killer(ply, 1)
-        return moves.sorted {
-            orderKey($0, board: board, ctx: ctx, ttMove: ttMove, k0: k0, k1: k1)
-                > orderKey($1, board: board, ctx: ctx, ttMove: ttMove, k0: k0, k1: k1)
-        }
+        // Score each move once (orderKey can run SEE, so don't recompute it per
+        // comparison inside the sort).
+        var keyed = moves.map { (mv: $0, key: orderKey($0, board: board, ctx: ctx,
+                                                        ttMove: ttMove, k0: k0, k1: k1)) }
+        keyed.sort { $0.key > $1.key }
+        return keyed.map { $0.mv }
     }
 
     private static func orderKey(_ mv: Move, board: Board, ctx: SearchContext,
@@ -421,10 +540,16 @@ enum Engine {
         if let t = ttMove, mv == t { return 1_000_000_000 }
         if mv.isCapture, let victim = board.piece(at: mv.to) {
             if victim.type == .king { return 900_000_000 }
-            // MVV-LVA: prefer taking the most valuable victim with the least
-            // valuable attacker, so winning captures are searched first.
             let attacker = board.piece(at: mv.from)?.type ?? .skjolding
-            return 500_000_000 + baseValue(victim.type) * 16 - baseValue(attacker)
+            let mvvlva = baseValue(victim.type) * 16 - baseValue(attacker)
+            // Spend SEE only on potentially-losing captures (a cheaper piece
+            // taking a more valuable one is essentially always good). A capture
+            // that loses material is ordered below all quiet moves.
+            if baseValue(victim.type) < baseValue(attacker) {
+                let see = staticExchangeEval(board, mv)
+                if see < 0 { return -100_000 + see }
+            }
+            return 500_000_000 + mvvlva
         }
         if let k = k0, mv == k { return 400_000_000 }
         if let k = k1, mv == k { return 399_000_000 }
@@ -436,10 +561,11 @@ enum Engine {
     // Static score from `me`'s perspective (positive = good for `me`). Symmetric:
     // every term is added for `me` and subtracted for the opponent.
     //
-    // Piece value = a fixed base (its characteristic open-board reach) plus a
-    // small bonus for its current reach. The base keeps captures correctly
-    // valued even when a piece is momentarily boxed in; the bonus rewards
-    // activity. Win-condition terms (king/castle/fort) sit on top.
+    // Piece value is a fixed three-tier base. On top sit a center-control term
+    // (pawns and minors earn most for contesting the middle), Skjolding
+    // advancement, and the win-condition terms (king/castle/fort). Material is a
+    // pure table lookup — no move generation — so the leaf eval is cheap and the
+    // search reaches more depth in the same time.
 
     static func evaluate(_ board: Board, for me: Side) -> Int {
         let opp = me.other
@@ -452,13 +578,20 @@ enum Engine {
         var myInOppFort = 0
         var oppInMyFort = 0
 
+        let center = board.castle
+        let half = board.N / 2
+
         for sq in board.squares {
             guard let p = sq else { continue }
             let sgn = p.side == me ? 1 : -1
 
-            // Material = fixed base value for the piece type, plus a small bonus
-            // for the squares it can currently reach (activity).
-            score += sgn * (baseValue(p.type) + board.mobilityCount(for: p) * mobilityWeight)
+            // Material — fixed three-tier base value.
+            score += sgn * baseValue(p.type)
+
+            // Center control — closeness to the middle, weighted by tier so that
+            // pawns and minors are the ones rewarded for occupying the center.
+            let closeness = half - p.pos.chebyshev(to: center)   // 0…half (half at center)
+            if closeness > 0 { score += sgn * closeness * centerWeight(p.type) }
 
             // Skjolding advancement toward the enemy.
             if p.type == .skjolding {
@@ -501,3 +634,7 @@ enum Engine {
         return score
     }
 }
+
+/// The classical engine's canonical name is `Herringbone`; `Engine` remains as a
+/// shorthand alias used throughout the app and tests.
+typealias Engine = Herringbone

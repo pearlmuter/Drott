@@ -47,6 +47,7 @@ enum SelfTest {
         hunterBoxedIn()
         dwarfKnightLineOfSight()
         freeCapture()
+        herringboneTrades()
         threefold()
         repetitionAwareEngine()
         depthCap()
@@ -221,6 +222,39 @@ enum SelfTest {
         let best = Engine.bestMove(for: b, timeLimit: 0.5)
         check(best?.to == Position(col: 4, row: 5),
               "engine captures the boxed-in Bowman (got \(best.map { b.notation(for: $0) } ?? "nil"))")
+    }
+
+    // Static Exchange Evaluation and the "don't drop pieces" behaviour it buys.
+    private static func herringboneTrades() {
+        print("[herringbone trades]")
+        let d4 = Position(col: 3, row: 3)
+        let d5 = Position(col: 3, row: 4)
+        let e6 = Position(col: 4, row: 5)
+
+        // Winning capture: a Dwarf takes an undefended pawn → SEE = +pawn.
+        var win = Board.empty()
+        win.put(.king, .red, Position(col: 0, row: 0))
+        win.put(.king, .black, Position(col: 8, row: 8))
+        win.put(.dwarf, .red, d4)
+        win.put(.skjolding, .black, d5)          // undefended
+        win.sideToMove = .red
+        let seeWin = Engine.staticExchangeEval(win, Move(from: d4, to: d5, isCapture: true))
+        check(seeWin == Engine.baseValue(.skjolding),
+              "SEE values a free pawn capture at +\(Engine.baseValue(.skjolding)) (got \(seeWin))")
+
+        // Losing capture: the same pawn is now defended by another pawn, so the
+        // Dwarf (500) is lost for a pawn (100) → SEE = 100 - 500 = -400.
+        var lose = win
+        lose.put(.skjolding, .black, e6)         // defends D5 (diagonal forward for Black)
+        let seeLose = Engine.staticExchangeEval(lose, Move(from: d4, to: d5, isCapture: true))
+        check(seeLose == Engine.baseValue(.skjolding) - Engine.baseValue(.dwarf),
+              "SEE values a Dwarf-for-pawn trade at -400 (got \(seeLose))")
+
+        // And the engine must not actually play that losing capture when a safe
+        // move is available.
+        let best = Engine.bestMove(for: lose, timeLimit: 0.4)
+        check(best != Move(from: d4, to: d5, isCapture: true),
+              "engine declines the losing Dwarf-for-pawn trade (got \(best.map { lose.notation(for: $0) } ?? "nil"))")
     }
 
     // Knight-move blocking rule: a knight move threads to its target by one of two

@@ -48,6 +48,7 @@ enum SelfTest {
         dwarfKnightLineOfSight()
         swordShieldwall()
         attackMapControl()
+        sampleBerserkerProbe()
         freeCapture()
         herringboneTrades()
         developmentPreferences()
@@ -319,6 +320,62 @@ enum SelfTest {
             maxHang = max(maxHang, picked.map { hangsAfter(p3, $0) } ?? 0)
         }
         check(maxHang <= 0, "no variety pick across the pool hangs the moved piece (max=\(maxHang))")
+    }
+
+    // Diagnostic: reproduce Emil's medium game up to Red's move 23 and report
+    // the Red Berserker's legal moves (expected to include E4).
+    private static func sampleBerserkerProbe() {
+        print("[berserker probe]")
+        let text = """
+        1. G2-G4   E7-D6
+        2. Hu G1-H2   F7-E6
+        3. Ax F1-H3   Sp E8-E7
+        4. F3-F5   D6-C5
+        5. F5xE6   D7-C6
+        6. C2-C4   C6-C7
+        7. G4-F5   C5-B4
+        8. B1-B3   G8-G6
+        9. F5-F7   C8-B7
+        10. Ax H3-G5   B4-A3
+        11. D3-D5   Bw D8-C8
+        12. Bk D2-D4   Bk F8-G7
+        13. Hu H2-G4   Bw C8-B8
+        14. Wo C1-C2   C7-C5
+        15. Wo C2-A2   Bw B8-C8
+        16. Wo A2xA3   H9-I8
+        17. Wo A3-A5   Sw F9-H7
+        18. E3-F4   Ax D9-F8
+        19. Wo A5-A7   Ax F8-H9
+        20. Hu G4-I5   Sw H7-H8
+        21. Wo A7-A9   K E9-F8
+        22. Wo A9xB9   Ax H9-I9
+        """
+        let squares = GameState.parseSquares(text)        // 44 plies = 88 squares
+        var b = Board()
+        var ply = 0
+        var i = 0
+        while i + 1 < squares.count {
+            let from = squares[i], to = squares[i + 1]; i += 2
+            guard b.legalMoves().contains(where: { $0.from == from && $0.to == to }) else {
+                check(false, "replay ply \(ply + 1) \(from)-\(to) is legal")
+                return
+            }
+            b = b.applying(Move(from: from, to: to, isCapture: b.piece(at: to) != nil))
+            ply += 1
+        }
+        check(b.sideToMove == .red, "after 44 plies it is Red to move (got \(b.sideToMove))")
+
+        let e4 = Position(col: 4, row: 3)
+        // Locate the Red berserker.
+        var berserker: Piece?
+        for sq in b.squares where sq?.type == .berserker && sq?.side == .red { berserker = sq }
+        check(berserker != nil, "found the Red berserker (at \(berserker?.pos.description ?? "nil"))")
+        if let bk = berserker {
+            let (m, a) = b.validDestinations(for: bk)
+            let onE4 = b.piece(at: e4).map { "\($0.side.rawValue) \($0.type.symbol)" } ?? "empty"
+            print("    berserker at \(bk.pos), E4 is \(onE4), moves=\(m.map { $0.description }.sorted()) attacks=\(a.map { $0.description }.sorted())")
+            check(m.contains(e4) || a.contains(e4), "Red berserker can move to E4")
+        }
     }
 
     // The Sword (elf) slides diagonally but cannot slip between two pieces that

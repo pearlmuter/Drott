@@ -47,6 +47,7 @@ enum SelfTest {
         hunterBoxedIn()
         dwarfKnightLineOfSight()
         swordShieldwall()
+        spearmanRangeTwo()
         attackMapControl()
         sampleBerserkerProbe()
         freeCapture()
@@ -408,6 +409,56 @@ enum SelfTest {
         let (m2, _) = open.validDestinations(for: s2)
         check(m2.contains(e5) && m2.contains(f6),
               "Sword slides NE when only one flank is occupied")
+    }
+
+    // Spearman range-2 lateral moves must respect the secondary shieldwall: two
+    // pieces flanking the step from the range-1 square to the range-2 square
+    // should block passage, just as they would block any diagonal step.
+    private static func spearmanRangeTwo() {
+        print("[spearman range-2 shieldwall]")
+        // Red Spearman at D4. Left diagonal (C5) is clear so leftClear=true.
+        // Pieces at C6 and B5 form a shieldwall on the C5→B6 step.
+        // The range-2 left destination B6 must be blocked.
+        let d4  = Position(col: 3, row: 3)   // spearman
+        let c5  = Position(col: 2, row: 4)   // range-1 left (must be empty)
+        let b6  = Position(col: 1, row: 5)   // range-2 left target (should be blocked)
+        let c6  = Position(col: 2, row: 5)   // secondary shieldwall piece (forward of C5)
+        let b5  = Position(col: 1, row: 4)   // secondary shieldwall piece (left of C5)
+
+        var blocked = Board.empty()
+        blocked.put(.king, .red,   Position(col: 0, row: 0))
+        blocked.put(.king, .black, Position(col: 8, row: 8))
+        blocked.put(.spearman, .red, d4)
+        blocked.put(.skjolding, .black, c6)   // secondary shieldwall
+        blocked.put(.skjolding, .black, b5)   // secondary shieldwall
+        let sp1 = blocked.piece(at: d4)!
+        let (m1, _) = blocked.validDestinations(for: sp1)
+        check( m1.contains(c5), "spearman can reach C5 (range-1 left, shieldwall not yet)")
+        check(!m1.contains(b6), "spearman blocked at B6 by secondary shieldwall (C6+B5)")
+
+        // Removing one shieldwall piece opens the path.
+        var open = blocked
+        open.squares[open.index(b5)] = nil
+        let sp2 = open.piece(at: d4)!
+        let (m2, _) = open.validDestinations(for: sp2)
+        check(m2.contains(b6), "spearman reaches B6 when only one shieldwall piece present")
+
+        // Symmetric test for range-2 right: E5 clear, pieces at E6+F5 block F6.
+        let e5 = Position(col: 4, row: 4)
+        let f6 = Position(col: 5, row: 5)
+        let e6 = Position(col: 4, row: 5)
+        let f5 = Position(col: 5, row: 4)
+
+        var blockedR = Board.empty()
+        blockedR.put(.king, .red,   Position(col: 0, row: 0))
+        blockedR.put(.king, .black, Position(col: 8, row: 8))
+        blockedR.put(.spearman, .red, d4)
+        blockedR.put(.skjolding, .black, e6)
+        blockedR.put(.skjolding, .black, f5)
+        let sp3 = blockedR.piece(at: d4)!
+        let (m3, _) = blockedR.validDestinations(for: sp3)
+        check( m3.contains(e5), "spearman can reach E5 (range-1 right)")
+        check(!m3.contains(f6), "spearman blocked at F6 by secondary shieldwall (E6+F5)")
     }
 
     // Net square control: +1 per Red attacker, −1 per Black; both sides cancel.

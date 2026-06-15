@@ -479,9 +479,13 @@ struct Board {
         if occupied(c, r + fwd) && occupied(c + 1, r) { rightClear = false }
         else { rightClear = add(c + 1, r + fwd) }
 
-        if centerClear { _ = add(c,     r + 2 * fwd) }
-        if leftClear   { _ = add(c - 2, r + 2 * fwd) }
-        if rightClear  { _ = add(c + 2, r + 2 * fwd) }
+        if centerClear { _ = add(c, r + 2 * fwd) }
+        if leftClear  && !(occupied(c - 1, r + 2 * fwd) && occupied(c - 2, r + fwd)) {
+            _ = add(c - 2, r + 2 * fwd)
+        }
+        if rightClear && !(occupied(c + 1, r + 2 * fwd) && occupied(c + 2, r + fwd)) {
+            _ = add(c + 2, r + 2 * fwd)
+        }
 
         _ = add(c, r - fwd)
     }

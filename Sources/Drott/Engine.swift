@@ -157,17 +157,20 @@ enum Herringbone {
         t == .king ? 10_000 : baseValue(t)
     }
 
-    /// Center-control weight per tier. Contesting the middle of the board is the
-    /// job of pawns and minor pieces, so they earn the most for being central;
-    /// the heavier pieces earn little (we don't want them clogging the center).
-    private static func centerWeight(_ t: PieceType) -> Int {
-        switch t {
-        case .skjolding:                     return 6
-        case .spearman, .bowman, .berserker: return 5
-        case .wolf, .hunter:                 return 2
-        case .dwarf, .elf:                   return 1
-        case .king:                          return 0   // the king wants the castle, handled below
-        }
+    // Positional weights (eval units). Small nudges that shape development
+    // without overriding material or the win-condition terms.
+    private static let pawnCenterWeight = 6     // pawns occupy/advance through the center
+    private static let minorFileWeight  = 6     // minors hold the central files (defend the center)
+    private static let flankFileWeight  = 4     // middle/major pieces head for the flank files
+    private static let developWeight    = 4     // …and off their own back rank, capped a few ranks in
+
+    /// Flank-development score for a middle or major piece: it earns the most for
+    /// sitting on a flank file and for having left its back rank (the advance is
+    /// capped so the term rewards getting into play, not over-extending).
+    private static func flankDevelopment(_ p: Piece, centerCol: Int, N: Int) -> Int {
+        let flank = abs(p.pos.col - centerCol)
+        let advance = p.side == .red ? p.pos.row : (N - 1 - p.pos.row)
+        return flank * flankFileWeight + min(advance, 3) * developWeight
     }
 
     // How often, and within what margin, the engine plays the second-best move
@@ -561,11 +564,14 @@ enum Herringbone {
     // Static score from `me`'s perspective (positive = good for `me`). Symmetric:
     // every term is added for `me` and subtracted for the opponent.
     //
-    // Piece value is a fixed three-tier base. On top sit a center-control term
-    // (pawns and minors earn most for contesting the middle), Skjolding
-    // advancement, and the win-condition terms (king/castle/fort). Material is a
-    // pure table lookup — no move generation — so the leaf eval is cheap and the
-    // search reaches more depth in the same time.
+    // Piece value is a fixed three-tier base. On top sit positional terms that
+    // shape development by tier:
+    //   • pawns occupy and advance through the center,
+    //   • minor pieces hold the central files (defend the center),
+    //   • middle and major pieces head for the flank files and get into play,
+    //   • and middle pieces are encouraged to develop before major pieces.
+    // Material is a pure table lookup — no move generation — so the leaf eval is
+    // cheap and the search reaches more depth in the same time.
 
     static func evaluate(_ board: Board, for me: Side) -> Int {
         let opp = me.other
@@ -577,9 +583,13 @@ enum Herringbone {
         var oppFortDefenders = 0
         var myInOppFort = 0
         var oppInMyFort = 0
+        var myMiddleDev = 0, oppMiddleDev = 0
+        var myMajorDev = 0,  oppMajorDev = 0
 
         let center = board.castle
+        let centerCol = board.N / 2
         let half = board.N / 2
+        let N = board.N
 
         for sq in board.squares {
             guard let p = sq else { continue }
@@ -588,19 +598,35 @@ enum Herringbone {
             // Material — fixed three-tier base value.
             score += sgn * baseValue(p.type)
 
-            // Center control — closeness to the middle, weighted by tier so that
-            // pawns and minors are the ones rewarded for occupying the center.
-            let closeness = half - p.pos.chebyshev(to: center)   // 0…half (half at center)
-            if closeness > 0 { score += sgn * closeness * centerWeight(p.type) }
-
-            // Skjolding advancement toward the enemy.
-            if p.type == .skjolding {
-                let advance = p.side == .red ? p.pos.row : (board.N - 1 - p.pos.row)
-                score += sgn * advance * 4
-            }
-
-            if p.type == .king {
+            // Tier-specific positional shaping.
+            switch p.type {
+            case .king:
                 if p.side == me { myKing = p.pos } else { oppKing = p.pos }
+
+            case .skjolding:
+                // Occupy the center and advance toward the enemy.
+                let closeness = half - p.pos.chebyshev(to: center)
+                if closeness > 0 { score += sgn * closeness * pawnCenterWeight }
+                let advance = p.side == .red ? p.pos.row : (N - 1 - p.pos.row)
+                score += sgn * advance * 4
+
+            case .spearman, .bowman, .berserker:
+                // Minor pieces defend the center by holding the central files.
+                let centralFile = half - abs(p.pos.col - centerCol)
+                if centralFile > 0 { score += sgn * centralFile * minorFileWeight }
+
+            case .wolf, .hunter:
+                // Middle pieces develop toward the flanks.
+                let d = flankDevelopment(p, centerCol: centerCol, N: N)
+                score += sgn * d
+                if p.side == me { myMiddleDev += d } else { oppMiddleDev += d }
+
+            case .dwarf, .elf:
+                // Major pieces develop toward the flanks (but, by the term below,
+                // ideally after the middle pieces have come out).
+                let d = flankDevelopment(p, centerCol: centerCol, N: N)
+                score += sgn * d
+                if p.side == me { myMajorDev += d } else { oppMajorDev += d }
             }
 
             // Fort bookkeeping.
@@ -610,6 +636,11 @@ enum Herringbone {
             if p.side == me  && board.isFort(p.pos, for: opp) { myInOppFort += 1 }
             if p.side == opp && board.isFort(p.pos, for: me)  { oppInMyFort += 1 }
         }
+
+        // Develop middle pieces before major pieces: penalise a side whose major
+        // pieces are more developed than its middle pieces.
+        score -= max(0, myMajorDev  - myMiddleDev)
+        score += max(0, oppMajorDev - oppMiddleDev)
 
         let castlePos = board.castle
 

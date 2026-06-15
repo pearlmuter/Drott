@@ -48,6 +48,7 @@ enum SelfTest {
         dwarfKnightLineOfSight()
         freeCapture()
         herringboneTrades()
+        developmentPreferences()
         threefold()
         repetitionAwareEngine()
         depthCap()
@@ -255,6 +256,68 @@ enum SelfTest {
         let best = Engine.bestMove(for: lose, timeLimit: 0.4)
         check(best != Move(from: d4, to: d5, isCapture: true),
               "engine declines the losing Dwarf-for-pawn trade (got \(best.map { lose.notation(for: $0) } ?? "nil"))")
+    }
+
+    // Tier-specific development preferences in the static eval: minors hold the
+    // center files, middle and major pieces head for the flanks, and middle
+    // pieces are preferred to develop before major pieces.
+    private static func developmentPreferences() {
+        print("[development preferences]")
+        // Red-perspective eval of a position with both kings plus one red test
+        // piece; the kings are fixed, so eval differences isolate the piece term.
+        func eval(_ type: PieceType, at pos: Position) -> Int {
+            var b = Board.empty()
+            b.put(.king, .red, Position(col: 0, row: 0))
+            b.put(.king, .black, Position(col: 8, row: 8))
+            b.put(type, .red, pos)
+            return Engine.evaluate(b, for: .red)
+        }
+        let central = Position(col: 4, row: 3)   // central file, clear of forts/back rank
+        let flank   = Position(col: 1, row: 3)   // flank file, same rank
+
+        let minorCentral = eval(.spearman, at: central)
+        let minorFlank   = eval(.spearman, at: flank)
+        check(minorCentral > minorFlank,
+              "minor piece prefers the central file (\(minorCentral) > \(minorFlank))")
+
+        let middleFlank   = eval(.wolf, at: flank)
+        let middleCentral = eval(.wolf, at: central)
+        check(middleFlank > middleCentral,
+              "middle piece prefers the flank file (\(middleFlank) > \(middleCentral))")
+
+        // Major pieces prefer the flank files too — checked with the middle
+        // pieces already developed, so the develop-middle-first term (which would
+        // otherwise cancel a lone major's development) doesn't mask the file term.
+        func evalMajor(at pos: Position) -> Int {
+            var b = Board.empty()
+            b.put(.king, .red, Position(col: 0, row: 0))
+            b.put(.king, .black, Position(col: 8, row: 8))
+            b.put(.wolf,   .red, Position(col: 0, row: 3))   // developed middle anchors
+            b.put(.hunter, .red, Position(col: 8, row: 3))
+            b.put(.dwarf,  .red, pos)
+            return Engine.evaluate(b, for: .red)
+        }
+        let majorFlank   = evalMajor(at: flank)
+        let majorCentral = evalMajor(at: central)
+        check(majorFlank > majorCentral,
+              "major piece prefers the flank file (\(majorFlank) > \(majorCentral))")
+
+        // Develop middle before major: same two pieces, swapped between a
+        // developed flank square and an undeveloped central back-rank square.
+        func evalDev(middleAt: Position, majorAt: Position) -> Int {
+            var b = Board.empty()
+            b.put(.king, .red, Position(col: 0, row: 0))
+            b.put(.king, .black, Position(col: 8, row: 8))
+            b.put(.wolf,  .red, middleAt)
+            b.put(.dwarf, .red, majorAt)
+            return Engine.evaluate(b, for: .red)
+        }
+        let home  = Position(col: 4, row: 0)   // central, undeveloped
+        let outDev = Position(col: 1, row: 1)  // flank, developed
+        let middleFirst = evalDev(middleAt: outDev, majorAt: home)
+        let majorFirst  = evalDev(middleAt: home,   majorAt: outDev)
+        check(middleFirst > majorFirst,
+              "developing the middle piece before the major scores higher (\(middleFirst) > \(majorFirst))")
     }
 
     // Knight-move blocking rule: a knight move threads to its target by one of two

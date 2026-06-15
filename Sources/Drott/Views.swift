@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // `SQ` (square size) is defined in Models.swift and shared with drag hit-testing.
 
@@ -146,6 +147,18 @@ struct SidePanel: View {
                 }
             }
 
+            // Save / load games (play-by-mail, practice positions).
+            HStack(spacing: 8) {
+                Button { saveGame() } label: {
+                    Label("Save", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity)
+                }
+                .disabled(game.record.isEmpty)
+                Button { loadGame() } label: {
+                    Label("Load", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
+                }
+            }
+            .controlSize(.small)
+
             // Tab picker
             Picker("", selection: $tab) {
                 Text("Game").tag(SideTab.game)
@@ -228,21 +241,10 @@ struct SidePanel: View {
         }
     }
 
-    // Board size / opponent / strength — setup only.
+    // Opponent / strength — setup only.
     private var settingsCard: some View {
         infoCard {
             VStack(alignment: .leading, spacing: 6) {
-                fieldLabel("BOARD SIZE")
-                Picker("", selection: Binding(
-                    get: { game.boardSize },
-                    set: { game.setBoardSize($0) }
-                )) {
-                    ForEach(BoardSize.allCases) { size in
-                        Text(size.rawValue).tag(size)
-                    }
-                }
-                .pickerStyle(.segmented)
-
                 fieldLabel("COMPUTER PLAYS")
                 Picker("", selection: Binding(
                     get: { game.opponent },
@@ -573,39 +575,38 @@ struct SidePanel: View {
 
                     rulesSection("MOVEMENT") {
                         """
-                        • All pieces move in a straight line to their destination.
-                        • No piece may jump over another (except the shieldwall rule below).
-                        • Shieldwall: two pieces standing orthogonally adjacent to a diagonal path block that path.
-                        • Capture by landing on the enemy's square. The captured piece is removed.
+                        • Most pieces slide in a straight line and cannot jump over another piece.
+                        • The Axe and Hunter make a knight's leap. It is legal only if a straight line can be drawn from their square to the target without crossing an occupied square — and two pieces set corner-to-corner (diagonally) across the path also block the leap.
+                        • Shieldwall: a one-step diagonal move is blocked when both squares beside it (orthogonally) are occupied.
+                        • Capture by landing on an enemy piece, which is removed.
                         """
                     }
 
                     rulesSection("SKJOLDING  (V)") {
                         """
-                        The most numerous piece. Moves forward toward the opponent. The square directly in front is open — Skjoldings cannot attack straight ahead. Placed diagonally they protect each other. Build chains for a strong line.
+                        The footsoldier, and the most numerous piece. Advances two squares forward (the square just ahead must be clear), captures one square diagonally forward, and may step one square back. Diagonally placed Skjoldings guard one another — build chains for a strong line.
                         """
                     }
 
                     rulesSection("OFFICERS") {
                         """
-                        K   King — must be protected. Can enter the Castle to win.
-                        Sp  Spearman — limited retreat.
-                        Bw  Bowman — long range; limited retreat.
-                        Bk  Berserker — wide field of action. Limited retreat.
-                        El  Elf — king moves or diagonal slide up to 4.
+                        K   King — one step in any direction. Reaches the Castle to win.
+                        Sp  Spearman — wide reach ahead; narrow retreat.
+                        Bw  Bowman — slides up to 4 forward; one step sideways.
+                        Bk  Berserker — three forward lanes up to 3; one step sideways.
+                        Sw  Sword — one step orthogonally, or a diagonal slide up to 4.
                         Wo  Wolf — orthogonal slide up to 3.
-                        Dw  Dwarf — short orthogonal/diagonal + knight shape (no jump).
-                        Hu  Hunter — diagonal step + knight shape (no jump).
+                        Ax  Axe — short orthogonal/diagonal step, plus a knight's leap.
+                        Hu  Hunter — diagonal step, plus a knight's leap.
                         """
                     }
 
                     rulesSection("STRATEGY NOTES") {
                         """
-                        • Control the centre to limit the opponent's King from approaching the Castle.
-                        • Develop officers early so flanks aren't open.
-                        • Double-advance: officers work best in tandem (Wolf+Elf, Hunter+Dwarf).
-                        • King advance can be a winning threat — but leaves your own Fort exposed.
-                        • Material advantage? Attack both flanks at once — one must give.
+                        • Minor pieces (Spearman, Bowman, Berserker) hold the centre and keep the enemy King from the Castle.
+                        • Develop the Wolf and Hunter to the flanks first, the Sword and Axe behind them.
+                        • The King's march to the Castle is a winning threat — but watch your own Fort.
+                        • Material edge? Press both flanks at once — one must give.
                         """
                     }
                 }
@@ -648,6 +649,29 @@ struct SidePanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8)
                 .fill(Color(NSColor.controlBackgroundColor)))
+    }
+
+    // MARK: Save / load panels
+
+    private func saveGame() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "drott-game.txt"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? game.exportGame().write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func loadGame() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .text]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        if !game.importGame(from: text) {
+            game.statusMessage = "Couldn't read that game file."
+        }
     }
 }
 

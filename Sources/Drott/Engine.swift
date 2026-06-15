@@ -26,6 +26,9 @@ struct SearchResult {
     var score: Int        // best move's score, from the side-to-move's view
     var secondScore: Int
     var depth: Int        // depth of the last fully-completed iteration
+    /// Every root move with its score, best first. Used to pick among the moves
+    /// that are nearly as good as the best (move variety).
+    var rootMoves: [(move: Move, score: Int)] = []
 }
 
 /// Tracks how many times each position has occurred, across the real game
@@ -173,10 +176,10 @@ enum Herringbone {
         return flank * flankFileWeight + min(advance, 3) * developWeight
     }
 
-    // How often, and within what margin, the engine plays the second-best move
-    // instead of the best — just enough to break determinism without blundering.
-    static let varietyProbability = 0.30
-    static let varietyMargin = 30          // in eval units (~0.3 "pawns")
+    // For move variety the engine chooses at random among the root moves whose
+    // score is within this margin of the best — i.e. only between moves that are
+    // almost as good, never a clearly inferior one. (~0.3 "pawns".)
+    static let varietyMargin = 30
 
     // Aspiration window half-width (eval units) for iterative deepening.
     static let aspirationWindow = 50
@@ -238,6 +241,7 @@ enum Herringbone {
             result.score = iter.bestScore
             result.secondBest = iter.second
             result.secondScore = iter.secondScore
+            result.rootMoves = iter.scored
             result.depth = depth
             prevScore = iter.bestScore
 
@@ -253,25 +257,32 @@ enum Herringbone {
         search(board, timeLimit: timeLimit).best
     }
 
-    /// Pick a move from a result, occasionally choosing the second-best (when it
-    /// is nearly as good) so play is not perfectly deterministic. A forced win is
-    /// always taken; a second-best that loses is never chosen. When `board` is
-    /// given, a variety pick is rejected if it would hang the moved piece — the
-    /// scores can rate two moves equal when the alternative's refutation is just
-    /// past the search horizon, so this guard checks it statically.
+    /// Pick a move from a result, choosing at random among the moves that are
+    /// almost as good as the best (within `varietyMargin`) so play is not perfectly
+    /// deterministic — never a clearly inferior move. The best move is always in the
+    /// pool; near-best alternatives are admitted only if they don't lose material
+    /// (a forced win, or a move that would hang the just-moved piece, is excluded —
+    /// the scores can rate two moves equal when a refutation sits just past the
+    /// search horizon, so this checks it statically). With `allowVariety` false the
+    /// best move is always returned.
     static func pickMove(from r: SearchResult, on board: Board? = nil,
                          allowVariety: Bool = true,
                          rng: () -> Double = { Double.random(in: 0..<1) }) -> Move? {
         guard let best = r.best else { return nil }
-        guard allowVariety else { return best }                // strongest setting: always best
-        guard let second = r.secondBest else { return best }
-        if r.score >= mateThreshold { return best }            // take the win
-        if r.secondScore <= -mateThreshold { return best }     // 2nd is a loss
-        if r.score - r.secondScore <= varietyMargin, rng() < varietyProbability {
-            if let board, hangsMovedPiece(second, on: board) { return best }
-            return second
+        guard allowVariety, !r.rootMoves.isEmpty else { return best }
+        if r.score >= mateThreshold { return best }            // take a forced win deterministically
+
+        var pool: [Move] = [best]                              // best is always eligible
+        for (mv, score) in r.rootMoves {
+            if mv == best { continue }
+            if r.score - score > varietyMargin { break }       // rootMoves are sorted best-first
+            if score <= -mateThreshold { continue }            // never a losing line
+            if let board, hangsMovedPiece(mv, on: board) { continue }
+            pool.append(mv)
         }
-        return best
+        guard pool.count > 1 else { return best }
+        let i = min(pool.count - 1, Int(rng() * Double(pool.count)))
+        return pool[i]
     }
 
     /// True if, after `mv`, the opponent can win the just-moved piece on its
@@ -293,6 +304,7 @@ enum Herringbone {
         var second: Move?
         var secondScore: Int
         var ordering: [Move]
+        var scored: [(move: Move, score: Int)]   // all root moves with scores, best first
         var completed: Bool
     }
 
@@ -337,7 +349,8 @@ enum Herringbone {
         // are unreliable, so the caller discards it for the reported result.
         guard completed else {
             return RootIteration(best: best, bestScore: bestScore, second: nil,
-                                 secondScore: -infinity, ordering: ordering, completed: false)
+                                 secondScore: -infinity, ordering: ordering,
+                                 scored: [], completed: false)
         }
 
         scored.sort { $0.score > $1.score }
@@ -345,7 +358,7 @@ enum Herringbone {
             best: scored[0].move, bestScore: scored[0].score,
             second: scored.count > 1 ? scored[1].move : nil,
             secondScore: scored.count > 1 ? scored[1].score : -infinity,
-            ordering: scored.map { $0.move }, completed: true)
+            ordering: scored.map { $0.move }, scored: scored, completed: true)
     }
 
     // MARK: Negamax + alpha-beta + TT + PVS

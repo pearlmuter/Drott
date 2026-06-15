@@ -50,6 +50,7 @@ enum SelfTest {
         herringboneTrades()
         developmentPreferences()
         hangingProbe()
+        saveLoadRoundTrip()
         threefold()
         repetitionAwareEngine()
         depthCap()
@@ -301,8 +302,8 @@ enum SelfTest {
         p2.sideToMove = .red
         probe("dwarf vs pawn-guarded square", p2)
 
-        // The variety pick must never hand the opponent a free piece: with a
-        // forced near-tie where the alternative hangs, it falls back to best.
+        // The variety pick chooses only among near-best moves and never hands the
+        // opponent a free piece: sweeping the whole candidate pool, no pick hangs.
         var p3 = Board.empty()
         p3.put(.king, .red, Position(col: 0, row: 0))
         p3.put(.king, .black, Position(col: 8, row: 8))
@@ -310,10 +311,46 @@ enum SelfTest {
         p3.put(.skjolding, .black, Position(col: 3, row: 5))
         p3.sideToMove = .red
         let r = Engine.search(p3, timeLimit: 0.5)
-        // Force the variety branch (rng always 0) and require it not to hang.
-        let picked = Engine.pickMove(from: r, on: p3, allowVariety: true, rng: { 0 })
-        let pickedHang = picked.map { hangsAfter(p3, $0) } ?? 0
-        check(pickedHang <= 0, "variety pick never hangs the moved piece (hang=\(pickedHang))")
+        var maxHang = 0
+        for f in stride(from: 0.0, to: 1.0, by: 0.05) {
+            let picked = Engine.pickMove(from: r, on: p3, allowVariety: true, rng: { f })
+            maxHang = max(maxHang, picked.map { hangsAfter(p3, $0) } ?? 0)
+        }
+        check(maxHang <= 0, "no variety pick across the pool hangs the moved piece (max=\(maxHang))")
+    }
+
+    // A game can be exported to text and re-imported to the same position, and an
+    // illegal move file is rejected without changing anything.
+    private static func saveLoadRoundTrip() {
+        print("[save / load]")
+        // Build a real short game by always playing the first legal move.
+        var b = Board()
+        var text = "Drott 9×9\n"
+        for _ in 0..<6 {
+            guard let mv = b.legalMoves().first else { break }
+            text += "\(mv.from)-\(mv.to)\n"
+            b = b.applying(mv)
+        }
+
+        let g = GameState(); g.evalEnabled = false
+        check(g.importGame(from: text), "import a generated game")
+        check(g.record.count == 6, "imported the expected move count (\(g.record.count))")
+        check(g.liveBoard == b, "imported final position matches the played game")
+
+        // Export then re-import: the position must survive the round-trip.
+        let g2 = GameState(); g2.evalEnabled = false
+        check(g2.importGame(from: g.exportGame()), "re-import of exported text succeeds")
+        check(g2.liveBoard == b, "round-trip reproduces the final position")
+
+        // Lenient parsing: square pairs anywhere in the text are enough.
+        check(GameState.parseSquares("note: E2-E4, then D8xD6!").count == 4,
+              "parser extracts square pairs from prose")
+
+        // A file with an illegal move is rejected and leaves the game untouched.
+        let g3 = GameState(); g3.evalEnabled = false
+        let before = g3.liveBoard
+        check(!g3.importGame(from: "A1-A9"), "an illegal move file is rejected")
+        check(g3.liveBoard == before, "rejected import does not mutate the game")
     }
 
     // Tier-specific development preferences in the static eval: minors hold the

@@ -8,12 +8,14 @@ var SQ: CGFloat = 66   // updated by GameState; both sizes target 594px (9×66 =
 
 // MARK: - Board size
 
+// Drott is played on a single 9×9 board. `BoardSize` is kept as a thin type so
+// the rest of the code (Board.size, etc.) stays unchanged, but there is only one
+// size now.
 enum BoardSize: String, CaseIterable, Identifiable {
-    case nine  = "9×9"
-    case eleven = "11×11"
+    case nine = "9×9"
     var id: String { rawValue }
-    var N: Int { self == .nine ? 9 : 11 }
-    var squareSize: CGFloat { self == .nine ? 66 : 54 }   // both → 594px board (9×66 = 11×54)
+    var N: Int { 9 }
+    var squareSize: CGFloat { 66 }   // 9×66 = 594px board
 }
 
 // MARK: - Position
@@ -33,35 +35,19 @@ struct Position: Equatable, Hashable, CustomStringConvertible {
     // MARK: Fort squares
 
     static func redFortSquares(N: Int) -> Set<Position> {
-        if N == 9 {
-            return [
-                Position(col:2,row:0), Position(col:3,row:0), Position(col:4,row:0),
-                Position(col:5,row:0), Position(col:6,row:0),
-                Position(col:3,row:1), Position(col:4,row:1), Position(col:5,row:1)
-            ]
-        } else {
-            return [
-                Position(col:3,row:0), Position(col:4,row:0), Position(col:5,row:0),
-                Position(col:6,row:0), Position(col:7,row:0),
-                Position(col:4,row:1), Position(col:5,row:1), Position(col:6,row:1)
-            ]
-        }
+        [
+            Position(col:2,row:0), Position(col:3,row:0), Position(col:4,row:0),
+            Position(col:5,row:0), Position(col:6,row:0),
+            Position(col:3,row:1), Position(col:4,row:1), Position(col:5,row:1)
+        ]
     }
 
     static func blackFortSquares(N: Int) -> Set<Position> {
-        if N == 9 {
-            return [
-                Position(col:2,row:8), Position(col:3,row:8), Position(col:4,row:8),
-                Position(col:5,row:8), Position(col:6,row:8),
-                Position(col:3,row:7), Position(col:4,row:7), Position(col:5,row:7)
-            ]
-        } else {
-            return [
-                Position(col:3,row:10), Position(col:4,row:10), Position(col:5,row:10),
-                Position(col:6,row:10), Position(col:7,row:10),
-                Position(col:4,row:9),  Position(col:5,row:9),  Position(col:6,row:9)
-            ]
-        }
+        [
+            Position(col:2,row:8), Position(col:3,row:8), Position(col:4,row:8),
+            Position(col:5,row:8), Position(col:6,row:8),
+            Position(col:3,row:7), Position(col:4,row:7), Position(col:5,row:7)
+        ]
     }
 
     // MARK: Castle zone: 3×3 around the castle plus 3-square orthogonal arms.
@@ -100,14 +86,22 @@ enum PieceType: String, CaseIterable, Identifiable {
         case .berserker: return "Bk"
         case .spearman:  return "Sp"
         case .bowman:    return "Bw"
-        case .elf:       return "El"
+        case .elf:       return "Sw"   // the Sword
         case .wolf:      return "Wo"
-        case .dwarf:     return "Dw"
+        case .dwarf:     return "Ax"   // the Axe
         case .hunter:    return "Hu"
         case .skjolding: return "V"
         }
     }
-    var fullName: String { rawValue.capitalized }
+    // The `elf`/`dwarf` raw values are kept (asset filenames, hashing); only the
+    // player-facing names change to "Sword" and "Axe".
+    var fullName: String {
+        switch self {
+        case .elf:   return "Sword"
+        case .dwarf: return "Axe"
+        default:     return rawValue.capitalized
+        }
+    }
 
     /// Compact 1…9 code used for fast position hashing.
     var code: UInt8 {
@@ -603,22 +597,12 @@ struct Board {
     //   Red row 0: B1 V · C1 Wo · D1 El · E1 K · F1 Dw · G1 Hu · H1 V
     //   Red row 1: C2 V · D2 Bk · E2 Sp · F2 Bw · G2 V
     //   Black: point-symmetric (col→8-col, row→8-row)
-    //
-    // 11×11:
-    //   Red row 0: C1 V · D1 Wo · E1 El · F1 K · G1 Dw · H1 Hu · I1 V
-    //   Red row 1: D2 V · E2 Bk · F2 Sp · G2 Bw · H2 V
-    //   Red row 2: E3 V · F3 V · G3 V
-    //   Black: point-symmetric (col→10-col, row→10-row)
 
     private mutating func place(_ type: PieceType, _ side: Side, col: Int, row: Int) {
         squares[index(col, row)] = Piece(type: type, side: side, pos: Position(col: col, row: row))
     }
 
     private mutating func setupStart() {
-        if N == 9 { setup9x9() } else { setup11x11() }
-    }
-
-    private mutating func setup9x9() {
         // Red
         place(.skjolding, .red, col: 1, row: 0)
         place(.wolf,      .red, col: 2, row: 0)
@@ -652,42 +636,6 @@ struct Board {
         place(.skjolding, .black, col: 5, row: 6)
         place(.skjolding, .black, col: 4, row: 6)
         place(.skjolding, .black, col: 3, row: 6)
-    }
-
-    private mutating func setup11x11() {
-        // Red
-        place(.skjolding, .red, col: 2, row: 0)
-        place(.wolf,      .red, col: 3, row: 0)
-        place(.elf,       .red, col: 4, row: 0)
-        place(.king,      .red, col: 5, row: 0)
-        place(.dwarf,     .red, col: 6, row: 0)
-        place(.hunter,    .red, col: 7, row: 0)
-        place(.skjolding, .red, col: 8, row: 0)
-        place(.skjolding, .red, col: 3, row: 1)
-        place(.berserker, .red, col: 4, row: 1)
-        place(.spearman,  .red, col: 5, row: 1)
-        place(.bowman,    .red, col: 6, row: 1)
-        place(.skjolding, .red, col: 7, row: 1)
-        place(.skjolding, .red, col: 4, row: 2)
-        place(.skjolding, .red, col: 5, row: 2)
-        place(.skjolding, .red, col: 6, row: 2)
-
-        // Black (point-symmetric: col→10-col, row→10-row)
-        place(.skjolding, .black, col: 8, row: 10)
-        place(.wolf,      .black, col: 7, row: 10)
-        place(.elf,       .black, col: 6, row: 10)
-        place(.king,      .black, col: 5, row: 10)
-        place(.dwarf,     .black, col: 4, row: 10)
-        place(.hunter,    .black, col: 3, row: 10)
-        place(.skjolding, .black, col: 2, row: 10)
-        place(.skjolding, .black, col: 7, row: 9)
-        place(.berserker, .black, col: 6, row: 9)
-        place(.spearman,  .black, col: 5, row: 9)
-        place(.bowman,    .black, col: 4, row: 9)
-        place(.skjolding, .black, col: 3, row: 9)
-        place(.skjolding, .black, col: 6, row: 8)
-        place(.skjolding, .black, col: 5, row: 8)
-        place(.skjolding, .black, col: 4, row: 8)
     }
 }
 
@@ -894,6 +842,97 @@ class GameState: ObservableObject {
         lineHighlight = nil
         clearSelection()
         scheduleAnalysis()
+    }
+
+    // MARK: Save / load (play-by-mail and practice positions)
+
+    /// The moves played so far as a small, human-readable text file. Each move
+    /// keeps its notation, so the file doubles as a readable game score; import
+    /// only needs the square coordinates within it.
+    func exportGame() -> String {
+        var out = "Drott 9×9\n"
+        var i = 0
+        var moveNo = 1
+        while i < record.count {
+            var line = "\(moveNo). \(record[i].notation)"
+            i += 1
+            if i < record.count {            // pair Black's reply on the same line
+                line += "   \(record[i].notation)"
+                i += 1
+            }
+            out += line + "\n"
+            moveNo += 1
+        }
+        return out
+    }
+
+    /// Rebuild a game from text produced by `exportGame` (or any text containing
+    /// the moves as square pairs, e.g. "E2-E4  D8-D6"). Returns false without
+    /// changing anything if a move is illegal from the position it reaches.
+    @discardableResult
+    func importGame(from text: String) -> Bool {
+        let squares = GameState.parseSquares(text)
+        guard squares.count >= 2, squares.count % 2 == 0 else { return false }
+
+        var boards: [Board] = [Board()]
+        var moves: [MoveRecord] = []
+        var board = boards[0]
+        var i = 0
+        while i + 1 < squares.count {
+            let from = squares[i], to = squares[i + 1]
+            i += 2
+            guard board.legalMoves().contains(where: { $0.from == from && $0.to == to }) else {
+                return false
+            }
+            let mv = Move(from: from, to: to, isCapture: board.piece(at: to) != nil)
+            let side = board.sideToMove
+            let notation = board.notation(for: mv)
+            board = board.applying(mv)
+            moves.append(MoveRecord(move: mv, notation: notation, side: side,
+                                    reason: board.winner != nil ? board.winReason : nil))
+            boards.append(board)
+        }
+
+        // Commit: load the position and let the user continue (or analyse, if the
+        // imported game is already decided). Both sides are human after import.
+        isPlaying = false
+        thinking = false
+        cancelDeepAnalysis()
+        opponent = .off
+        SQ = boardSize.squareSize
+        history = boards
+        record = moves
+        viewIndex = boards.count - 1
+        graphScores = Array(repeating: nil, count: boards.count)
+        showGraph = false
+        drawPly = nil
+        concededLoser = nil
+        drawAgreed = false
+        statusMessage = nil
+        lineHighlight = nil
+        clearSelection()
+        phase = board.winner != nil ? .finished : .playing
+        scheduleAnalysis()
+        return true
+    }
+
+    /// Extract board squares (a letter A–I followed by a digit 1–9) in order,
+    /// ignoring move numbers, piece symbols and punctuation.
+    static func parseSquares(_ text: String) -> [Position] {
+        var result: [Position] = []
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            defer { i += 1 }
+            guard let ascii = chars[i].uppercased().first?.asciiValue,
+                  ascii >= 65, ascii <= 73,                       // A…I
+                  i + 1 < chars.count,
+                  let row = chars[i + 1].wholeNumberValue, (1...9).contains(row)
+            else { continue }
+            result.append(Position(col: Int(ascii - 65), row: row - 1))
+            i += 1   // consume the digit too
+        }
+        return result
     }
 
     /// "Start Game": leave setup and begin play with the chosen options.
@@ -1448,12 +1487,6 @@ class GameState: ObservableObject {
             tap(Position(col: Int(colAscii) - 65, row: rowNum - 1))
         case "reset":
             reset()
-        case "size":
-            switch parts.dropFirst().first {
-            case "9":  setBoardSize(.nine)
-            case "11": setBoardSize(.eleven)
-            default: break
-            }
         case "ai":
             switch parts.dropFirst().first {
             case "red":   setOpponent(.computerRed)

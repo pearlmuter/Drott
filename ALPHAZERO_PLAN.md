@@ -233,11 +233,16 @@ previous one's exit criterion is met.
       forever on a repeat). `python/train_drott.py` — self-contained ply-capped
       self-play trainer + eval-vs-random (stock Coach/Arena are uncapped → would
       hang). Pipeline runs end to end; policy loss decreases.
-- [ ] Reach trained-net-vs-random ≫ 50% — needs a longer run than a quick smoke
-      (pure-Python MCTS on one Mac is slow). The mechanism is proven; this is just
-      compute. Discovered gotcha: **stalemate/cycle handling** — Drott needs a
-      move-clock or cap so games terminate (the trainer caps at `--maxmoves`).
-- **Exit:** trained-net-vs-random win rate ≫ 50%; loss curves sane.
+- [x] Trained net beats random ≫ 50%. Untrained net+MCTS already sweeps random
+      (75–100%); with the history-window + arena accept/reject gate the best net
+      holds **80–90% vs random** across iterations (the ungated loop collapsed to
+      35% by overfitting — the gate reverts a regressing net). Discovered gotcha:
+      **cycle handling** — Drott positions repeat, so games need a move-cap (the
+      trainer caps at `--maxmoves`) and MCTS needs a depth cap.
+- **Exit MET (sanity):** trained-net-vs-random 80–90%; loss decreases; gate keeps
+  strength non-decreasing. *Strong/rising play (real Elo) is Phase 4 — needs many
+  more episodes/sims than a minutes-long smoke, and `--threshold 0.6` (0.5 let a
+  5–5 tie through).*
 
 > **Key finding (2026-06-15):** the canonical form rotates the board (unlike
 > Othello's colour-only flip), so the canonical-frame action must be rotated 180°

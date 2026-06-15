@@ -221,12 +221,29 @@ previous one's exit criterion is met.
   42k captures, 1,964 king-captures, 90 castle wins, 1,205 fort wins. Python
   matches Swift 100%. The rule-drift gate is closed; NN work may begin.
 
-### Phase 2 — Game adapter + sanity training  ⬜
-- [ ] I: `DrottGame.py` implementing the §1.1 interface over `drott_rules.py`.
-- [ ] I: `DrottNNet.py` adapted from Othello (18→ channels, 6561 actions).
-- [ ] I: tiny-config run (few iters, few sims) to prove the loop produces a net
-      that beats a random player.
-- **Exit:** trained-net-vs-random win rate ≫ 50% in Arena; loss curves sane.
+### Phase 2 — Game adapter + sanity training  🟦 (in progress, 2026-06-15)
+- [x] `python/drott_game.py` — alpha-zero-general `Game` over `drott_rules.py`:
+      9×9 signed-int grid, 6561 from×to actions, canonical = 180°+swap, action
+      180°-remap in `getNextState` for player −1, static `getGameEnded`, identity
+      symmetries. **Proven in lockstep with the rules** (`test_game.py`: 300 games
+      / 31,133 plies, start hash matches Swift, all terminals agree).
+- [x] `python/drott_nnet.py` — `DrottNNet` (conv tower → policy[6561] + value),
+      18-plane input, runs on MPS or CPU. `python/capped_mcts.py` — depth-capped
+      MCTS (Drott positions cycle; the stock unbounded `MCTS.search` recurses
+      forever on a repeat). `python/train_drott.py` — self-contained ply-capped
+      self-play trainer + eval-vs-random (stock Coach/Arena are uncapped → would
+      hang). Pipeline runs end to end; policy loss decreases.
+- [ ] Reach trained-net-vs-random ≫ 50% — needs a longer run than a quick smoke
+      (pure-Python MCTS on one Mac is slow). The mechanism is proven; this is just
+      compute. Discovered gotcha: **stalemate/cycle handling** — Drott needs a
+      move-clock or cap so games terminate (the trainer caps at `--maxmoves`).
+- **Exit:** trained-net-vs-random win rate ≫ 50%; loss curves sane.
+
+> **Key finding (2026-06-15):** the canonical form rotates the board (unlike
+> Othello's colour-only flip), so the canonical-frame action must be rotated 180°
+> back inside `getNextState` when the real player is Black (Coach/Arena sample the
+> action in canonical space but apply it on the real board). Inside MCTS the
+> player is always 1, so no remap there. Proven correct by the lockstep test.
 
 ### Phase 3 — Inference bridge into Swift  ⬜
 - [ ] I: CoreML export script (PyTorch → CoreML), verified to match PyTorch

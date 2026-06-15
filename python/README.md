@@ -21,6 +21,11 @@ CoreML and driven by a native Swift MCTS.
 | `test_parity.py` | Loads the golden corpus and asserts Python == Swift for hashes, legal-move sets, and every transition. |
 | `parity_corpus.json` | **Generated** (git-ignored, ~33 MB). The Swift-side oracle. Regenerate any time the Swift rules change (see below). |
 | `requirements.txt` | Torch/numpy/coremltools etc. — only needed from Phase 2 on. |
+| `drott_game.py` | **Phase 2.** alpha-zero-general `Game` adapter over the rules. |
+| `test_game.py` | **Phase 2.** Lockstep proof: the adapter matches drott_rules across 300 games / 31k plies through the full Game API. |
+| `drott_nnet.py` | **Phase 2.** PyTorch policy/value net (18 planes → 6561 policy + value) + framework wrapper; MPS or CPU. |
+| `capped_mcts.py` | **Phase 2.** Depth-capped MCTS (Drott positions cycle; stock MCTS recurses forever on a repeat). |
+| `train_drott.py` | **Phase 2.** Self-contained ply-capped self-play trainer + eval-vs-random smoke run. |
 
 ## The parity workflow (run this whenever the Swift rules change)
 
@@ -38,7 +43,21 @@ python3 test_parity.py parity_corpus.json
 If parity fails, the Python port has drifted from `Models.swift` — fix
 `drott_rules.py` (or the Swift rules, whichever is wrong) before training.
 
-## Next (Phase 2)
+## Phase 2 — running the pipeline
 
-`DrottGame.py` (alpha-zero-general `Game` adapter over `drott_rules.py`) and
-`DrottNNet.py` (PyTorch net: 18→ conv tower → policy[6561] + value heads).
+```bash
+python3 test_game.py                       # prove the Game adapter matches the rules
+python3 train_drott.py --device cpu        # tiny smoke: self-play -> train -> eval vs random
+# longer signal:
+python3 train_drott.py --iters 3 --eps 10 --sims 25 --maxmoves 160 --eval 20 --device cpu
+```
+
+Notes:
+- Batch-1 MCTS inference is ~2× faster on **CPU** than MPS here (`--device cpu`);
+  MPS wins for big training batches. The trainer defaults to CPU.
+- Reaching ≫50% vs random is just compute — pure-Python MCTS on one Mac is slow.
+
+## Next (Phase 3)
+
+CoreML export of a checkpoint (numerical parity vs PyTorch), then a native Swift
+MCTS + `NeuralEngine` so the app plays a full game from an exported net.

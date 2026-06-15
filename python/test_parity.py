@@ -40,6 +40,7 @@ def run(path):
     hash_fail = 0
     moveset_fail = 0
     trans_fail = 0
+    static_fail = 0        # static_outcome(result) must equal applying()'s verdict
     examples = []          # collect a few concrete mismatches to print
     EX_CAP = 12
 
@@ -89,16 +90,24 @@ def run(path):
                      f"py(k={res.repetition_key()},w={res.winner},wr={res.win_reason}) "
                      f"swift(k={m['k']},w={exp_w},wr={exp_wr})")
 
+            # The static getGameEnded formulation must agree with applying().
+            if res.static_outcome() != (res.winner, res.win_reason):
+                static_fail += 1
+                note("static", cid,
+                     f"move {frm}->{to}: static={res.static_outcome()} "
+                     f"applying=({res.winner},{res.win_reason})")
+
     print(f"  checked {n_moves} transitions")
     print(f"  hash mismatches:      {hash_fail}")
     print(f"  move-set mismatches:  {moveset_fail}")
     print(f"  transition mismatches:{trans_fail}")
+    print(f"  static-outcome fails: {static_fail}")
     if examples:
         print("\nfirst mismatches:")
         for e in examples:
             print("  " + e)
 
-    ok = (hash_fail == 0 and moveset_fail == 0 and trans_fail == 0)
+    ok = (hash_fail == 0 and moveset_fail == 0 and trans_fail == 0 and static_fail == 0)
     print("\n" + ("PARITY OK — Python matches Swift 100%" if ok else "PARITY FAILED"))
     return 0 if ok else 1
 

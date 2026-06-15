@@ -164,6 +164,29 @@ class Board:
             b.win_reason = "fort"
         return b
 
+    def static_outcome(self):
+        """Win/loss as a PURE function of (occupancy, side_to_move) — no move
+        history. For a board produced by `applying` (side already switched), this
+        equals the (winner, win_reason) that `applying` itself computed. That
+        equivalence (proven over the whole corpus in test_parity.py) is what lets
+        the alpha-zero-general adapter implement `getGameEnded` statically, even
+        though Drott's castle/fort wins read as "survive to your next turn":
+        surviving IS encoded by it being your turn again with the claim intact.
+
+        Returns (winner, reason) or (None, None) for an ongoing position.
+        """
+        stm = self.side_to_move
+        # Your king is gone -> it was captured last move -> the opponent won.
+        if self.king_position(stm) is None:
+            return (other(stm), "kingCapture")
+        # It is your turn with your king on the castle / holding the enemy fort:
+        # the claim you set up survived the opponent's reply.
+        if self.king_position(stm) == CASTLE:
+            return (stm, "castle")
+        if self.has_fort_control(stm):
+            return (stm, "fort")
+        return (None, None)
+
     def has_fort_control(self, side: str) -> bool:
         opp = other(side)
         in_opp = False

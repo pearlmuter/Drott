@@ -228,7 +228,7 @@ struct SidePanel: View {
         }
     }
 
-    // Board size / opponent / strength / speed — setup only.
+    // Board size / opponent / strength — setup only.
     private var settingsCard: some View {
         infoCard {
             VStack(alignment: .leading, spacing: 6) {
@@ -261,22 +261,9 @@ struct SidePanel: View {
                         get: { game.thinkTime },
                         set: { game.thinkTime = $0 }
                     )) {
-                        Text("Fast").tag(0.4)
-                        Text("Normal").tag(1.2)
-                        Text("Strong").tag(2.5)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                if game.opponent == .selfPlay {
-                    fieldLabel("SPEED")
-                    Picker("", selection: Binding(
-                        get: { game.stepDelay },
-                        set: { game.stepDelay = $0 }
-                    )) {
-                        Text("Slow").tag(2.0)
-                        Text("1×").tag(1.0)
-                        Text("Fast").tag(0.4)
+                        Text("Easy").tag(2.0)
+                        Text("Normal").tag(5.0)
+                        Text("Hard").tag(10.0)
                     }
                     .pickerStyle(.segmented)
                 }

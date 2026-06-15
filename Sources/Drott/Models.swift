@@ -730,10 +730,12 @@ class GameState: ObservableObject {
 
     /// Who controls each side.
     @Published var opponent: OpponentMode = .off
-    /// Search time budget per move, in seconds.
-    @Published var thinkTime: Double = 1.2
-    /// Minimum seconds between moves during self-play / replay.
-    @Published var stepDelay: Double = 1.0
+    /// Search time budget per move, in seconds — the engine's strength setting
+    /// (Easy 2 / Normal 5 / Hard 10). Longer thinking = stronger play.
+    @Published var thinkTime: Double = 5.0
+    /// Fixed pace (seconds) for stepping through already-recorded history during
+    /// self-play replay. Live moves are paced by `thinkTime` itself.
+    private let replayStepDelay: Double = 0.6
     /// True while the engine is searching.
     @Published var thinking = false
     /// True while self-play / replay is auto-advancing.
@@ -1263,7 +1265,7 @@ class GameState: ObservableObject {
 
         if viewIndex < history.count - 1 {
             // Replay forward through already-recorded history at a watchable pace.
-            DispatchQueue.main.asyncAfter(deadline: .now() + stepDelay) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + replayStepDelay) { [weak self] in
                 guard let self, self.isPlaying else { return }
                 if self.viewIndex < self.history.count - 1 { self.viewIndex += 1 }
                 self.advanceLoop()
@@ -1279,7 +1281,7 @@ class GameState: ObservableObject {
             isPlaying = false
             return
         }
-        generateEngineMove(minStep: stepDelay) { [weak self] in
+        generateEngineMove(minStep: 0.15) { [weak self] in
             self?.advanceLoop()
         }
     }

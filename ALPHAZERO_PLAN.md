@@ -239,9 +239,11 @@ previous one's exit criterion is met.
 - **Exit:** a strongest checkpoint at/near 1400 vs. the defined pool, plus a
   spread of weaker opponents selectable in the UI.
 
-### Phase 5 — Polish & (optional) 11×11  ⬜
+### Phase 5 — Polish  ⬜
 - [ ] Tune net size/sims for play-time latency; trim the checkpoint set we ship.
-- [ ] (Optional) repeat the pipeline for the 11×11 variant.
+
+*(The 11×11 variant was removed from the game — 9×9 is the only board size, so
+there is no second-board-size phase.)*
 
 ---
 

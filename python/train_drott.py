@@ -14,6 +14,8 @@ Run:  python3 train_drott.py            # tiny smoke config (~minutes on MPS)
 import argparse
 import os
 import sys
+from collections import deque
+from random import shuffle
 
 import numpy as np
 
@@ -56,6 +58,47 @@ def random_action(game, canon):
     valids = game.getValidMoves(canon, 1)
     legal = np.where(valids)[0]
     return int(np.random.choice(legal))
+
+
+def play_match(game, pick_red, pick_black, n_games, cap):
+    """Generic head-to-head. pick_* (canonicalBoard) -> action. Colours alternate
+    so neither side keeps the first-move edge. Returns (red_fn_wins, black_fn_wins,
+    draws) tallied per *function*, not per colour."""
+    a_wins = b_wins = draws = 0
+    for i in range(n_games):
+        a_is_red = (i % 2 == 0)
+        board, cur, step = game.getInitBoard(), 1, 0
+        while True:
+            canon = game.getCanonicalForm(board, cur)
+            a_to_move = (cur == 1) == a_is_red
+            action = (pick_red if a_to_move else pick_black)(canon)
+            board, cur = game.getNextState(board, cur, action)
+            r = game.getGameEnded(board, cur)
+            step += 1
+            if r != 0:
+                winner_player = cur if r > 0 else -cur
+                a_player = 1 if a_is_red else -1
+                if winner_player == a_player:
+                    a_wins += 1
+                else:
+                    b_wins += 1
+                break
+            if step >= cap:
+                draws += 1
+                break
+    return a_wins, b_wins, draws
+
+
+def evaluate_head_to_head(game, new_net, old_net, n_games, sims, cap):
+    """Candidate net vs previous net, both with MCTS (temp=0). Fresh tree per game."""
+    args = dotdict({"numMCTSSims": sims, "cpuct": 1.0})
+
+    def mk(net):
+        def pick(canon):
+            return int(np.argmax(MCTS(game, net, args).getActionProb(canon, temp=0)))
+        return pick
+
+    return play_match(game, mk(new_net), mk(old_net), n_games, cap)
 
 
 def evaluate_vs_random(game, nnet, n_games, sims, cap):
@@ -103,6 +146,12 @@ def main():
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--eval", type=int, default=20)
     ap.add_argument("--evalsims", type=int, default=15)
+    ap.add_argument("--histwindow", type=int, default=4,
+                    help="iterations of self-play examples to retain for training")
+    ap.add_argument("--arena", type=int, default=14,
+                    help="head-to-head games for the accept/reject gate (0 = always accept)")
+    ap.add_argument("--threshold", type=float, default=0.5,
+                    help="candidate must win this fraction of DECISIVE arena games to be kept")
     ap.add_argument("--checkpoint", default="temp")
     ap.add_argument("--device", default="cpu",
                     help="cpu (fastest for batch-1 MCTS) | mps | cuda")
@@ -112,25 +161,49 @@ def main():
     net_args = dotdict({"lr": 0.001, "dropout": 0.3, "epochs": a.epochs,
                         "batch_size": 64, "num_channels": a.channels})
     nnet = NNetWrapper(game, net_args, device=a.device)
+    pnet = NNetWrapper(game, net_args, device=a.device)   # previous-net for the gate
     print(f"device: {nnet.device} | iters={a.iters} eps={a.eps} sims={a.sims} "
-          f"maxMoves={a.maxmoves} channels={a.channels}")
+          f"maxMoves={a.maxmoves} channels={a.channels} hist={a.histwindow} "
+          f"arena={a.arena} thr={a.threshold}")
 
     play_args = dotdict({"numMCTSSims": a.sims, "cpuct": 1.0,
                          "tempThreshold": 15, "maxMoves": a.maxmoves})
 
-    # Baseline before any training: untrained net+MCTS vs random.
     base = evaluate_vs_random(game, nnet, a.eval, a.evalsims, a.maxmoves)
     print(f"baseline (untrained) vs random: net {base[0]} / rand {base[1]} / draw {base[2]}")
 
+    history = deque(maxlen=a.histwindow)   # each entry: one iteration's examples
     for it in range(1, a.iters + 1):
-        examples = []
+        iter_examples = []
         for e in range(a.eps):
             ex = execute_episode(game, nnet, play_args)
-            examples += ex
-            print(f"  iter {it} ep {e + 1}/{a.eps}: {len(ex)} examples (total {len(examples)})")
-        print(f"iter {it}: training on {len(examples)} examples...")
-        nnet.train(examples)
-        nnet.save_checkpoint(a.checkpoint, f"checkpoint_{it}.pth.tar")
+            iter_examples += ex
+            print(f"  iter {it} ep {e + 1}/{a.eps}: {len(ex)} examples (total {len(iter_examples)})")
+        history.append(iter_examples)
+        train_examples = [ex for batch in history for ex in batch]
+        shuffle(train_examples)
+
+        # Keep a copy of the current net as the challenger baseline, then train.
+        nnet.save_checkpoint(a.checkpoint, "pre.pth.tar")
+        pnet.load_checkpoint(a.checkpoint, "pre.pth.tar")
+        print(f"iter {it}: training on {len(train_examples)} examples "
+              f"(history of {len(history)} iters)...")
+        nnet.train(train_examples)
+
+        # Accept/reject gate: keep the new net only if it actually beats the old.
+        if a.arena > 0:
+            nw, ow, dr = evaluate_head_to_head(game, nnet, pnet, a.arena, a.sims, a.maxmoves)
+            decisive = nw + ow
+            frac = (nw / decisive) if decisive else 0.0
+            if decisive == 0 or frac < a.threshold:
+                print(f"iter {it} arena: new {nw} / old {ow} / draw {dr} "
+                      f"-> REJECT (kept previous net)")
+                nnet.load_checkpoint(a.checkpoint, "pre.pth.tar")
+            else:
+                print(f"iter {it} arena: new {nw} / old {ow} / draw {dr} -> ACCEPT")
+                nnet.save_checkpoint(a.checkpoint, f"checkpoint_{it}.pth.tar")
+        else:
+            nnet.save_checkpoint(a.checkpoint, f"checkpoint_{it}.pth.tar")
 
         res = evaluate_vs_random(game, nnet, a.eval, a.evalsims, a.maxmoves)
         total = sum(res)

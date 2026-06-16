@@ -8,7 +8,7 @@ let package = Package(
         .executableTarget(
             name: "Drott",
             path: "Sources/Drott",
-            resources: [.process("pieces"), .copy("Astrid_v0.mlpackage")]
+            resources: [.process("pieces"), .copy("models")]
         )
     ]
 )

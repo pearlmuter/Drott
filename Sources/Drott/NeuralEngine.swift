@@ -25,10 +25,12 @@ enum NeuralEngine {
 
     // MARK: Model discovery & loading
 
-    /// Resource base-names of every bundled `*.mlpackage` (e.g. "Astrid_v0").
+    /// Resource base-names of every bundled model in `models/` (e.g. "Astrid_v0").
+    /// Drop a new `.mlpackage` into `Sources/Drott/models/`, rebuild, and it
+    /// appears here automatically — no code or Package.swift change needed.
     static func availableModels() -> [String] {
         guard let urls = Bundle.module.urls(forResourcesWithExtension: "mlpackage",
-                                             subdirectory: nil) else { return [] }
+                                             subdirectory: "models") else { return [] }
         return urls.map { $0.deletingPathExtension().lastPathComponent }.sorted()
     }
 
@@ -43,7 +45,8 @@ enum NeuralEngine {
     private static func model(named name: String) -> MLModel? {
         cacheLock.lock(); defer { cacheLock.unlock() }
         if let m = cache[name] { return m }
-        guard let url = Bundle.module.url(forResource: name, withExtension: "mlpackage") else {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "mlpackage",
+                                          subdirectory: "models") else {
             return nil
         }
         do {

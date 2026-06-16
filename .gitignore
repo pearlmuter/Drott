@@ -17,3 +17,9 @@ alpha-zero-general-master/
 python/temp/          # training checkpoints
 *.pth.tar
 *.examples
+
+# published Astrid models are local artifacts (~22 MB each). The baseline
+# Astrid_v0 is committed so the app builds out of the box; nets you publish
+# later (Astrid_v1, v2, …) stay local — back them up alongside python/temp/.
+Sources/Drott/models/*.mlpackage
+!Sources/Drott/models/Astrid_v0.mlpackage

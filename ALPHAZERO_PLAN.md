@@ -250,12 +250,19 @@ previous one's exit criterion is met.
 > action in canonical space but apply it on the real board). Inside MCTS the
 > player is always 1, so no remap there. Proven correct by the lockstep test.
 
-### Phase 3 — Inference bridge into Swift  ⬜
-- [ ] I: CoreML export script (PyTorch → CoreML), verified to match PyTorch
-      outputs on sample boards (numerical parity).
-- [ ] I: native Swift MCTS + `NeuralEngine` using the CoreML model, beside the
-      existing `Engine`; a settings toggle to choose engine.
-- **Exit:** the app plays a full legal game driven by an exported (even weak) net.
+### Phase 3 — Inference bridge into Swift  ✅ COMPLETE (2026-06-16)
+- [x] `python/export_coreml.py`: PyTorch → CoreML `.mlpackage`, **parity-gated**
+      (max|Δ| ~2e-6 vs PyTorch). Astrid v0 = checkpoint_4, bundled as a resource.
+- [x] `Sources/Drott/NeuralEngine.swift`: native cycle-safe MCTS over `Board`
+      driving the CoreML net; plane/action encoding mirrors the proven Python
+      (180° canonical + action remap for Black). Self-tests confirm legal moves
+      for both sides + a full Astrid-vs-Herringbone game.
+- [x] **Per-side player selection** (beyond a simple toggle): each of Red/Black is
+      Human, Herringbone (thinking-time dropdown), or Astrid (model + iterations
+      dropdowns). `OpponentMode`/global `thinkTime` → `redSetup`/`blackSetup`.
+- **Exit MET:** the app plays a full legal game driven by the exported net;
+      verified live (Herringbone vs Astrid v0 in the setup UI). Astrid v0 is weak
+      (Phase-2 net) — strength is the Phase-4 training job.
 
 ### Phase 4 — Real training + Elo ladder  ⬜
 - [ ] I: `train_nightly.py`, launchd plist, `progress.json`, Arena-Elo script.

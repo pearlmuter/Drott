@@ -51,6 +51,7 @@ enum SelfTest {
         berserkerLineOfSight()
         dwarfDiagonalTargetPinch()
         attackMapControl()
+        astridLegalMove()
         sampleBerserkerProbe()
         freeCapture()
         herringboneTrades()
@@ -539,6 +540,35 @@ enum SelfTest {
         let dw2 = open.piece(at: b2)!
         let (m2, _) = open.validDestinations(for: dw2)
         check(m2.contains(d4), "dwarf reaches D4 once the target-corner pinch is broken")
+    }
+
+    // Astrid (the neural engine) must load from the bundle and return a LEGAL move
+    // for both sides — the strongest check that the Swift plane/action encoding
+    // matches what the net trained against (a wrong encoding yields illegal or
+    // garbage picks). Black also exercises the 180° canonical/action remap.
+    private static func astridLegalMove() {
+        print("[astrid neural engine]")
+        let models = NeuralEngine.availableModels()
+        check(!models.isEmpty, "found bundled Astrid model(s): \(models)")
+        guard let name = models.first else { return }
+
+        let red = Board()
+        let redLegal = Set(red.legalMoves().map { "\($0.from)-\($0.to)" })
+        if let mv = NeuralEngine.bestMove(for: red, modelName: name, iterations: 30) {
+            check(redLegal.contains("\(mv.from)-\(mv.to)"),
+                  "Astrid returns a legal opening move for Red (\(red.notation(for: mv)))")
+        } else {
+            check(false, "Astrid returned a move for Red on the opening")
+        }
+
+        var black = Board(); black.sideToMove = .black
+        let blackLegal = Set(black.legalMoves().map { "\($0.from)-\($0.to)" })
+        if let mv = NeuralEngine.bestMove(for: black, modelName: name, iterations: 30) {
+            check(blackLegal.contains("\(mv.from)-\(mv.to)"),
+                  "Astrid returns a legal move for Black (180° remap ok)")
+        } else {
+            check(false, "Astrid returned a move for Black")
+        }
     }
 
     // Net square control: +1 per Red attacker, −1 per Black; both sides cancel.

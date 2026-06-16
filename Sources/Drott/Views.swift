@@ -75,13 +75,13 @@ struct GameGraphPanel: View {
                 if game.deepAnalyzing {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
-                        Text("\(game.deepProgress)/\(game.deepTotal) · \(GameGraphPanel.deepSeconds(game.thinkTime))s/move")
+                        Text("\(game.deepProgress)/\(game.deepTotal) · \(GameGraphPanel.deepSeconds(game.reviewTime))s/move")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                         Button("Stop") { game.cancelAnalysis() }
                             .controlSize(.small)
                     }
                 } else {
-                    Text("deep \(GameGraphPanel.deepSeconds(game.thinkTime))s/move · depth ≤\(GameState.analysisDepthCap)")
+                    Text("deep \(GameGraphPanel.deepSeconds(game.reviewTime))s/move · depth ≤\(GameState.analysisDepthCap)")
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
             }
@@ -248,40 +248,60 @@ struct SidePanel: View {
         }
     }
 
-    // Opponent / strength — setup only.
+    // Per-side player selection — setup only. Each side is Human, Herringbone, or
+    // Astrid, with that engine's own settings.
     private var settingsCard: some View {
         infoCard {
-            VStack(alignment: .leading, spacing: 6) {
-                fieldLabel("COMPUTER PLAYS")
-                Picker("", selection: Binding(
-                    get: { game.opponent },
-                    set: { game.setOpponent($0) }
-                )) {
-                    Text("Off").tag(OpponentMode.off)
-                    Text("Black").tag(OpponentMode.computerBlack)
-                    Text("Red").tag(OpponentMode.computerRed)
-                    Text("Self").tag(OpponentMode.selfPlay)
-                }
-                .pickerStyle(.segmented)
-
-                if game.opponent != .off {
-                    fieldLabel("STRENGTH")
-                    Picker("", selection: Binding(
-                        get: { game.thinkTime },
-                        set: { game.thinkTime = $0 }
-                    )) {
-                        Text("Easy").tag(2.0)
-                        Text("Normal").tag(5.0)
-                        Text("Hard").tag(10.0)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
+            VStack(alignment: .leading, spacing: 8) {
+                playerControls("RED PLAYER", $game.redSetup)
+                Divider().padding(.vertical, 1)
+                playerControls("BLACK PLAYER", $game.blackSetup)
                 Divider().padding(.vertical, 2)
-
                 Button("Start Game") { game.startGame() }
                     .buttonStyle(.borderedProminent)
                     .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// One side's player dropdown plus the chosen engine's settings dropdown(s).
+    @ViewBuilder
+    private func playerControls(_ title: String, _ setup: Binding<PlayerSetup>) -> some View {
+        fieldLabel(title)
+        Picker("", selection: setup.kind) {
+            ForEach(PlayerKind.allCases) { kind in Text(kind.label).tag(kind) }
+        }
+        .pickerStyle(.menu).labelsHidden()
+
+        switch setup.wrappedValue.kind {
+        case .human:
+            EmptyView()
+        case .herringbone:
+            HStack(spacing: 4) {
+                Text("thinking").font(.system(size: 10)).foregroundStyle(.secondary)
+                Picker("", selection: setup.thinkTime) {
+                    Text("Easy · 2s").tag(2.0)
+                    Text("Normal · 5s").tag(5.0)
+                    Text("Hard · 10s").tag(10.0)
+                }
+                .pickerStyle(.menu).labelsHidden()
+            }
+        case .astrid:
+            let models = NeuralEngine.availableModels()
+            HStack(spacing: 4) {
+                Picker("", selection: setup.astridModel) {
+                    if models.isEmpty { Text("no model").tag("") }
+                    ForEach(models, id: \.self) { m in
+                        Text(NeuralEngine.displayName(m)).tag(m)
+                    }
+                }
+                .pickerStyle(.menu).labelsHidden().disabled(models.isEmpty)
+                Picker("", selection: setup.iterations) {
+                    ForEach([50, 100, 200, 400], id: \.self) { n in
+                        Text("\(n) iters").tag(n)
+                    }
+                }
+                .pickerStyle(.menu).labelsHidden()
             }
         }
     }

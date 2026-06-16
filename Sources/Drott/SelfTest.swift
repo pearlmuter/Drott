@@ -52,6 +52,7 @@ enum SelfTest {
         dwarfDiagonalTargetPinch()
         attackMapControl()
         astridLegalMove()
+        astridPlaysFullGame()
         sampleBerserkerProbe()
         freeCapture()
         herringboneTrades()
@@ -571,6 +572,31 @@ enum SelfTest {
         }
     }
 
+    // Astrid and Herringbone must interoperate over a whole game: play Astrid (Red)
+    // vs Herringbone (Black) move by move, asserting every move is legal and the
+    // game progresses. Exercises the same dispatch the live engine loop uses.
+    private static func astridPlaysFullGame() {
+        print("[astrid plays a game]")
+        guard let model = NeuralEngine.availableModels().first else {
+            check(false, "no Astrid model bundled"); return
+        }
+        var b = Board()
+        var plies = 0
+        let cap = 80
+        var allLegal = true
+        while b.winner == nil && plies < cap {
+            let mv = b.sideToMove == .red
+                ? NeuralEngine.bestMove(for: b, modelName: model, iterations: 20)
+                : Engine.bestMove(for: b, timeLimit: 0.02)
+            guard let m = mv else { break }
+            if !b.legalMoves().contains(m) { allLegal = false; break }
+            b = b.applying(m)
+            plies += 1
+        }
+        check(allLegal, "every Astrid/Herringbone move was legal over \(plies) plies")
+        check(plies > 0, "the game progressed (\(plies) plies, result: \(b.winner?.rawValue ?? "ongoing/cap"))")
+    }
+
     // Net square control: +1 per Red attacker, −1 per Black; both sides cancel.
     private static func attackMapControl() {
         print("[attack map]")
@@ -850,7 +876,8 @@ enum SelfTest {
     private static func startFlow() {
         print("[start flow]")
         let g = GameState()
-        g.thinkTime = 0.05            // keep any spawned search short
+        g.redSetup.thinkTime = 0.05      // keep any spawned Herringbone search short
+        g.blackSetup.thinkTime = 0.05
 
         g.setOpponent(.selfPlay)
         check(g.phase == .setup && !g.isPlaying, "picking self-play stays in setup, no auto-start")

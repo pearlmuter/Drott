@@ -148,12 +148,36 @@ struct MoveRecord: Identifiable {
     let reason: WinReason?   // set if this move ended the game
 }
 
-/// Who controls each side.
+/// Who controls each side. Retained as a convenience for the file-command
+/// interface and tests; `setOpponent` maps it onto the per-side player setups.
 enum OpponentMode: Hashable {
     case off            // two humans
     case computerBlack  // computer plays Black
     case computerRed    // computer plays Red
     case selfPlay       // computer plays both
+}
+
+/// What kind of player controls a side.
+enum PlayerKind: String, CaseIterable, Identifiable, Hashable {
+    case human, herringbone, astrid
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .human:       return "Human"
+        case .herringbone: return "Herringbone"
+        case .astrid:      return "Astrid"
+        }
+    }
+}
+
+/// Per-side player configuration: who plays, and that engine's settings.
+/// `thinkTime` is Herringbone's search budget (seconds); `iterations` and
+/// `astridModel` are Astrid's MCTS simulation count and chosen CoreML model.
+struct PlayerSetup: Hashable {
+    var kind: PlayerKind = .human
+    var thinkTime: Double = 5.0          // Herringbone: Easy 2 / Normal 5 / Hard 10
+    var astridModel: String = ""         // Astrid: bundled model resource name
+    var iterations: Int = 100            // Astrid: MCTS simulations per move
 }
 
 // MARK: - Board
@@ -740,13 +764,16 @@ class GameState: ObservableObject {
     /// Board size for the next (or current) game.
     @Published var boardSize: BoardSize = .nine
 
-    /// Who controls each side.
-    @Published var opponent: OpponentMode = .off
-    /// Search time budget per move, in seconds — the engine's strength setting
-    /// (Easy 2 / Normal 5 / Hard 10). Longer thinking = stronger play.
-    @Published var thinkTime: Double = 5.0
+    /// Who controls each side. Each can be Human, Herringbone, or Astrid, with
+    /// that engine's own settings (Herringbone: thinking time; Astrid: model +
+    /// iterations).
+    @Published var redSetup   = PlayerSetup(kind: .human)
+    @Published var blackSetup = PlayerSetup(kind: .human)
+    /// Search budget (seconds) for the post-game deep "Engine analysis" review.
+    /// Independent of the per-side play strength now that each side has its own.
+    @Published var reviewTime: Double = 5.0
     /// Fixed pace (seconds) for stepping through already-recorded history during
-    /// self-play replay. Live moves are paced by `thinkTime` itself.
+    /// self-play replay. Live moves are paced by each engine's own budget.
     private let replayStepDelay: Double = 0.6
     /// True while the engine is searching.
     @Published var thinking = false
@@ -842,14 +869,21 @@ class GameState: ObservableObject {
         return nil
     }
 
+    /// The setup for a side.
+    func setup(for side: Side) -> PlayerSetup { side == .red ? redSetup : blackSetup }
+    /// True when neither side is human (self-play / engine-vs-engine).
+    var bothComputer: Bool { redSetup.kind != .human && blackSetup.kind != .human }
+
     /// Which side a human controls (the resigning / draw-offering side), or nil.
+    /// With both sides human it is whoever is to move; with one human, that side;
+    /// with neither, nil.
     var humanSide: Side? {
-        switch opponent {
-        case .computerBlack: return .red
-        case .computerRed:   return .black
-        case .off:           return liveBoard.sideToMove
-        case .selfPlay:      return nil
-        }
+        let redHuman = redSetup.kind == .human
+        let blackHuman = blackSetup.kind == .human
+        if redHuman && blackHuman { return liveBoard.sideToMove }
+        if redHuman { return .red }
+        if blackHuman { return .black }
+        return nil
     }
     /// Resign / draw offers are available while a human is playing.
     var canOfferResultControls: Bool { phase == .playing && !isGameOver && humanSide != nil }
@@ -866,7 +900,14 @@ class GameState: ObservableObject {
         return history.reduce(0) { $0 + ($1 == last ? 1 : 0) } >= 3
     }
 
-    init() { reset() }
+    init() {
+        // Default Astrid's model to a bundled one so selecting it just works.
+        if let m = NeuralEngine.availableModels().first {
+            redSetup.astridModel = m
+            blackSetup.astridModel = m
+        }
+        reset()
+    }
 
     // MARK: Public API
 
@@ -962,7 +1003,7 @@ class GameState: ObservableObject {
         isPlaying = false
         thinking = false
         cancelDeepAnalysis()
-        opponent = .off
+        setOpponent(.off)                 // both sides human after import
         SQ = boardSize.squareSize
         history = boards
         record = moves
@@ -1003,10 +1044,10 @@ class GameState: ObservableObject {
     func startGame() {
         guard phase == .setup else { return }
         phase = .playing
-        if opponent == .selfPlay {
-            play()
+        if bothComputer {
+            play()                 // engine-vs-engine self-play
         } else {
-            maybeScheduleReply()   // computer opens if it controls the first move
+            maybeScheduleReply()   // an engine opens if it controls the first move
         }
     }
 
@@ -1045,33 +1086,32 @@ class GameState: ObservableObject {
     /// The human offers a draw. Against another human it is simply agreed;
     /// against the computer it is accepted only if the computer is not winning.
     func offerDraw() {
-        guard canOfferResultControls else { return }
-        switch opponent {
-        case .off:
+        guard canOfferResultControls, let human = humanSide else { return }
+        let computer = human.other
+        // Against another human, a draw offer is simply agreed.
+        if setup(for: computer).kind == .human {
             agreeDraw()
-        case .computerBlack, .computerRed:
-            guard let computer = humanSide?.other else { return }
-            let snapshot = liveBoard
-            let pastBoards = history
-            statusMessage = "Offering a draw…"
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let result = Engine.search(snapshot, history: pastBoards, timeLimit: 0.6)
-                // Score from the computer's perspective.
-                let computerEval = snapshot.sideToMove == computer ? result.score : -result.score
-                DispatchQueue.main.async {
-                    guard let self, self.canOfferResultControls, self.liveBoard == snapshot else {
-                        self?.statusMessage = nil; return
-                    }
-                    // Accept if the computer is not clearly better (≤ ~0.5 pawn).
-                    if computerEval <= 50 {
-                        self.agreeDraw()
-                    } else {
-                        self.statusMessage = "Draw declined"
-                    }
+            return
+        }
+        // Against an engine, accept only if it is not clearly winning. Herringbone
+        // judges regardless of which engine the opponent is — it is only deciding
+        // whether to accept.
+        let snapshot = liveBoard
+        let pastBoards = history
+        statusMessage = "Offering a draw…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Engine.search(snapshot, history: pastBoards, timeLimit: 0.6)
+            let computerEval = snapshot.sideToMove == computer ? result.score : -result.score
+            DispatchQueue.main.async {
+                guard let self, self.canOfferResultControls, self.liveBoard == snapshot else {
+                    self?.statusMessage = nil; return
+                }
+                if computerEval <= 50 {
+                    self.agreeDraw()
+                } else {
+                    self.statusMessage = "Draw declined"
                 }
             }
-        case .selfPlay:
-            return
         }
     }
 
@@ -1239,7 +1279,7 @@ class GameState: ObservableObject {
         let boards = history
         let n = boards.count
         let drawAt = drawPly
-        let budget = thinkTime
+        let budget = reviewTime
 
         // Keep the contemporary values on screen; they are replaced in place.
         if graphScores.count != n { graphScores = Array(repeating: nil, count: n) }
@@ -1290,10 +1330,17 @@ class GameState: ObservableObject {
 
     // MARK: Mode
 
-    /// Choose who controls each side. Does NOT start play — the user presses
-    /// "Start Game" once the options are set.
+    /// Convenience used by the file-command interface and tests: map a coarse
+    /// opponent mode onto the per-side player setups (engines default to
+    /// Herringbone, preserving the setups' current strength/model fields).
     func setOpponent(_ mode: OpponentMode) {
-        opponent = mode
+        func engine(_ s: inout PlayerSetup) { if s.kind == .human { s.kind = .herringbone } }
+        switch mode {
+        case .off:           redSetup.kind = .human; blackSetup.kind = .human
+        case .computerBlack: redSetup.kind = .human; engine(&blackSetup)
+        case .computerRed:   engine(&redSetup);      blackSetup.kind = .human
+        case .selfPlay:      engine(&redSetup);      engine(&blackSetup)
+        }
         isPlaying = false
         selected = nil
         highlightMoves = []
@@ -1303,12 +1350,7 @@ class GameState: ObservableObject {
     private enum Controller { case human, computer }
 
     private func controller(of side: Side) -> Controller {
-        switch opponent {
-        case .off:           return .human
-        case .computerBlack: return side == .black ? .computer : .human
-        case .computerRed:   return side == .red ? .computer : .human
-        case .selfPlay:      return .computer
-        }
+        setup(for: side).kind == .human ? .human : .computer
     }
 
     // MARK: Playback controls
@@ -1460,11 +1502,10 @@ class GameState: ObservableObject {
 
     // MARK: AI
 
-    /// In single-computer modes, reply to the human as soon as it is the
-    /// computer's turn. (Self-play is driven by `advanceLoop` instead.)
+    /// When a human is involved, reply as soon as it is an engine's turn.
+    /// (Engine-vs-engine self-play is driven by `advanceLoop` instead.)
     private func maybeScheduleReply() {
-        guard phase == .playing else { return }
-        guard opponent == .computerBlack || opponent == .computerRed else { return }
+        guard phase == .playing, !bothComputer else { return }
         guard !isGameOver, controller(of: liveBoard.sideToMove) == .computer, !thinking else { return }
         generateEngineMove(minStep: 0.15) { [weak self] in
             self?.maybeScheduleReply()
@@ -1479,18 +1520,28 @@ class GameState: ObservableObject {
         thinking = true
         let snapshot = liveBoard
         let pastBoards = history          // includes the live board; for repetition
-        let budget = thinkTime
+        let setup = self.setup(for: snapshot.sideToMove)
         let start = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Engine.search(snapshot, history: pastBoards, timeLimit: budget)
-            // The strongest setting (Hard, 10s) plays the best move deterministically;
-            // easier settings vary for non-determinism, guarded against hanging.
-            let chosen = Engine.pickMove(from: result, on: snapshot, allowVariety: budget < 10)
+            let chosen: Move?
+            let redEval: Int?    // engine's Red-perspective score for the graph, if any
+            switch setup.kind {
+            case .herringbone:
+                let result = Engine.search(snapshot, history: pastBoards, timeLimit: setup.thinkTime)
+                // Hard (10s) plays the best move deterministically; easier settings
+                // vary for non-determinism, guarded against hanging.
+                chosen = Engine.pickMove(from: result, on: snapshot, allowVariety: setup.thinkTime < 10)
+                redEval = snapshot.sideToMove == .red ? result.score : -result.score
+            case .astrid:
+                chosen = NeuralEngine.bestMove(for: snapshot, history: pastBoards,
+                                               modelName: setup.astridModel,
+                                               iterations: setup.iterations)
+                redEval = nil    // graph falls back to the background Herringbone eval
+            case .human:
+                chosen = nil; redEval = nil
+            }
             let elapsed = Date().timeIntervalSince(start)
             if elapsed < minStep { Thread.sleep(forTimeInterval: minStep - elapsed) }
-            // The engine's view of this position, from Red's perspective, for
-            // the game eval graph.
-            let redEval = snapshot.sideToMove == .red ? result.score : -result.score
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.thinking = false

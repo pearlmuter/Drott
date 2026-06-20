@@ -1,0 +1,33 @@
+Drott 9×9
+1. G2-G4   E7-D6
+2. Hu G1-H2   F7-E6
+3. Ax F1-H3   Sp E8-E7
+4. F3-F5   D6-C5
+5. F5×E6   D7-C6
+6. C2-C4   C6-C7
+7. G4-F5   C5-B4
+8. B1-B3   G8-G6
+9. F5-F7   C8-B7
+10. Ax H3-G5   B4-A3
+11. D3-D5   Bw D8-C8
+12. Bk D2-D4   Bk F8-G7
+13. Hu H2-G4   Bw C8-B8
+14. Wo C1-C2   C7-C5
+15. Wo C2-A2   Bw B8-C8
+16. Wo A2×A3   H9-I8
+17. Wo A3-A5   Sw F9-H7
+18. E3-F4   Ax D9-F8
+19. Wo A5-A7   Ax F8-H9
+20. Hu G4-I5   Sw H7-H8
+21. Wo A7-A9   K E9-F8
+22. Wo A9×B9   Ax H9-I9
+23. Wo B9×C9   Bw C8-B8
+24. Wo C9-B9   C5-B4
+25. Wo B9×B8   Ax I9-H9
+26. Wo B8×B7   I8-I9
+27. Wo B7×B4   Sw H8-I7
+28. Ax G5×I7   Wo G9-D9
+29. Ax I7×H9   K F8-E9
+30. Ax H9×G7   K E9-F8
+31. Ax G7-G8   K F8×G8
+32. F7×G8

@@ -8,5 +8,7 @@
 
 torch>=2.2            # MPS backend for Apple Silicon GPU training
 numpy>=1.26
-coremltools>=7.2      # PyTorch -> CoreML export for the shipped Swift app
+coremltools>=7.2      # PyTorch -> CoreML export for the macOS Swift app
+onnxruntime>=1.18     # parity check in export_onnx.py
+onnx>=1.16            # re-save model with inline weights (no .data sidecar)
 tqdm>=4.66            # progress bars in the self-play / training loops

@@ -1,0 +1,56 @@
+{
+  "name": "drott",
+  "version": "0.1.0",
+  "description": "Drott — a Norse strategy game",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "bun test",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.27.0"
+  },
+  "build": {
+    "appId": "com.emildanielsen.drott",
+    "productName": "Drott",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
+    ],
+    "files": [
+      "main.js",
+      "index.html",
+      "style.css",
+      "board-state.js",
+      "drott-rules.js",
+      "herringbone-ai.js",
+      "onnx-ai.js",
+      "renderer.js",
+      "ai-dispatch.js",
+      "assets/**",
+      "onnx_models/**",
+      "node_modules/**",
+      "!node_modules/.cache/**",
+      "!**/*.test.js"
+    ],
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "category": "public.app-category.games"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Game"
+    },
+    "dmg": {
+      "title": "Drott"
+    }
+  }
+}

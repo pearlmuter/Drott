@@ -1,0 +1,6 @@
+node_modules/
+dist/
+onnx_models/*.onnx
+!onnx_models/astrid_v0.onnx
+onnx_models/*.onnx.data
+!onnx_models/astrid_v0.onnx.data

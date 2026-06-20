@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drott</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Left panel: controls -->
+    <div id="sidebar">
+      <div class="sidebar-head">
+        <h1 class="title">DROTT</h1>
+        <p class="subtitle">A Norse Strategy Game</p>
+        <p class="version-label">v0.201</p>
+      </div>
+
+      <div class="section">
+        <div class="player-row">
+          <span class="player-label red-label">Red</span>
+          <select id="red-kind" onchange="onPlayerChange('red')">
+            <option value="human">Human</option>
+            <option value="herringbone">Herringbone</option>
+            <option value="astrid">Astrid</option>
+          </select>
+        </div>
+        <div id="red-options" class="player-options" style="display:none"></div>
+
+        <div class="player-row" style="margin-top:10px">
+          <span class="player-label black-label">Black</span>
+          <select id="black-kind" onchange="onPlayerChange('black')">
+            <option value="human">Human</option>
+            <option value="herringbone">Herringbone</option>
+            <option value="astrid">Astrid</option>
+          </select>
+        </div>
+        <div id="black-options" class="player-options" style="display:none"></div>
+      </div>
+
+      <div class="btn-row">
+        <button id="new-game-btn" onclick="D.newGame()">New Game</button>
+        <button id="start-btn" onclick="D.startGame()">Start</button>
+      </div>
+      <div class="btn-row" style="margin-top:4px">
+        <button id="resign-btn" onclick="D.resign()">Resign</button>
+        <button id="draw-btn" onclick="D.offerDraw()" title="Offer draw">½</button>
+        <button id="abort-btn" onclick="D.abortGame()" title="Abort game">✕</button>
+      </div>
+
+      <div class="section" id="status-section">
+        <div id="turn-label" class="turn-label"></div>
+        <div id="eval-line" class="eval-line"></div>
+        <div class="captured-row">
+          <span class="cap-side red-label">Red:</span>
+          <span id="cap-red" class="cap-pieces"></span>
+        </div>
+        <div class="captured-row">
+          <span class="cap-side black-label">Black:</span>
+          <span id="cap-black" class="cap-pieces"></span>
+        </div>
+      </div>
+
+      <div class="section move-list-section">
+        <div class="move-list-header">
+          <h3>Moves</h3>
+          <div class="move-list-actions">
+            <button class="icon-btn" onclick="D.saveGame()" title="Save game">&#128190;</button>
+            <button class="icon-btn" onclick="D.loadGame()" title="Load game">&#128193;</button>
+          </div>
+        </div>
+        <div class="move-list-scroll">
+          <table id="move-list"></table>
+        </div>
+        <div class="move-nav">
+          <button class="nav-btn" onclick="D.navTo(0)" title="Start">|&#8249;</button>
+          <button class="nav-btn" onclick="D.navBack()" title="Back">&#8249;</button>
+          <button class="nav-btn" onclick="D.navForward()" title="Forward">&#8250;</button>
+          <button class="nav-btn" onclick="D.navTo(null)" title="End">&#8250;|</button>
+        </div>
+      </div>
+
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tab-game" onclick="switchTab('game')">Game</button>
+        <button class="tab-btn" id="tab-rules" onclick="switchTab('rules')">Rules</button>
+      </div>
+
+      <div id="panel-game">
+        <div class="section" id="eval-graph-section" style="display:none">
+          <svg id="eval-graph" width="192" height="44" style="display:block;width:100%"></svg>
+        </div>
+        <div class="section rules-section">
+          <h3>Win Conditions</h3>
+          <ul class="rules-list">
+            <li>Capture the enemy King</li>
+            <li>Move your King to the Castle</li>
+            <li>Occupy the enemy fort with no defenders</li>
+          </ul>
+        </div>
+      </div>
+
+      <div id="panel-rules" style="display:none">
+        <div class="section">
+          <div id="piece-legend"></div>
+        </div>
+        <div class="section rules-section">
+          <div class="rules-scroll">
+            <div class="rules-block">
+              <div class="rules-heading">HOW TO WIN</div>
+              <p>1. Capture the opponent's King.</p>
+              <p>2. Move your King onto the Castle (centre square) and survive until it is your turn again.</p>
+              <p>3. Have at least one of your pieces in the opponent's fort while they have no pieces in their own fort.</p>
+            </div>
+            <div class="rules-block">
+              <div class="rules-heading">MOVEMENT</div>
+              <p>Most pieces slide in a straight line and cannot jump over another piece.</p>
+              <p>The <b>Axe</b> and <b>Hunter</b> make a knight's leap. Legal only if a straight line from their square to the target doesn't cross an occupied square — pieces diagonally corner-to-corner also block.</p>
+              <p><b>Shieldwall:</b> a one-step diagonal move is blocked when both orthogonally adjacent squares are occupied.</p>
+              <p>Capture by landing on an enemy piece.</p>
+            </div>
+            <div class="rules-block">
+              <div class="rules-heading">SKJOLDING (V)</div>
+              <p>Advances two squares forward (square ahead must be clear), captures one square diagonally forward, steps one square back. Diagonally placed Skjoldings guard each other.</p>
+            </div>
+            <div class="rules-block">
+              <div class="rules-heading">OFFICERS</div>
+              <table class="piece-table">
+                <tr><td>K</td><td>King — one step any direction. Reaches Castle to win.</td></tr>
+                <tr><td>Sp</td><td>Spearman — wide reach ahead; narrow retreat.</td></tr>
+                <tr><td>Bw</td><td>Bowman — slides up to 4 forward; one step sideways.</td></tr>
+                <tr><td>Bk</td><td>Berserker — three forward lanes up to 3; one step sideways.</td></tr>
+                <tr><td>Sw</td><td>Sword — one step orthogonally, or diagonal slide up to 4.</td></tr>
+                <tr><td>Wo</td><td>Wolf — orthogonal slide up to 3.</td></tr>
+                <tr><td>Ax</td><td>Axe — short ortho/diagonal step, plus knight's leap.</td></tr>
+                <tr><td>Hu</td><td>Hunter — diagonal step, plus knight's leap.</td></tr>
+              </table>
+            </div>
+            <div class="rules-block">
+              <div class="rules-heading">STRATEGY</div>
+              <p>Hold the centre with Spearman, Bowman, Berserker to block the enemy King.</p>
+              <p>Develop Wolf and Hunter to the flanks first, Sword and Axe behind them.</p>
+              <p>The King's march to the Castle is a winning threat — guard your own Fort too.</p>
+              <p>Material edge? Press both flanks at once — one must give.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        function switchTab(name) {
+          document.getElementById('panel-game').style.display  = name === 'game'  ? '' : 'none';
+          document.getElementById('panel-rules').style.display = name === 'rules' ? '' : 'none';
+          document.getElementById('tab-game').classList.toggle('active',  name === 'game');
+          document.getElementById('tab-rules').classList.toggle('active', name === 'rules');
+          if (name === 'rules' && D.buildPieceLegend) D.buildPieceLegend();
+        }
+      </script>
+    </div>
+
+    <!-- Right panel: board -->
+    <div id="board-area">
+      <div id="board-wrap">
+        <div id="board-coord-wrap">
+          <div id="eval-bar-wrap" style="display:none">
+            <div id="eval-bar-black"></div>
+          </div>
+          <div id="coord-nums">
+            <span>9</span><span>8</span><span>7</span><span>6</span><span>5</span><span>4</span><span>3</span><span>2</span><span>1</span>
+          </div>
+          <div id="board-and-letters">
+            <div id="board-container"></div>
+            <div id="coord-letters">
+              <span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span><span>H</span><span>I</span>
+            </div>
+          </div>
+        </div>
+        <div id="result-banner" style="display:none"></div>
+
+        <div id="board-toolbar">
+          <button id="analyse-btn" class="board-tool-btn" onclick="D.toggleAnalysis()" title="Free piece exploration">Analyse</button>
+          <button id="attack-map-btn" class="board-tool-btn" onclick="D.toggleAttackMap()" title="Toggle attack map">Attack Map</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load order matters: board-state → rules → AI → renderer → dispatch -->
+  <script src="board-state.js"></script>
+  <script src="drott-rules.js"></script>
+  <script src="herringbone-ai.js"></script>
+  <script src="onnx-ai.js"></script>
+  <script src="renderer.js"></script>
+  <script src="ai-dispatch.js"></script>
+
+  <script>
+    // Player kind dropdown change handler
+    function onPlayerChange(side) {
+      const kind = document.getElementById(`${side}-kind`).value;
+      const setup = side === 'red' ? D.redSetup : D.blackSetup;
+      setup.kind = kind;
+      renderPlayerOptions(side, kind);
+    }
+
+    function renderPlayerOptions(side, kind) {
+      const el = document.getElementById(`${side}-options`);
+      el.innerHTML = '';
+      if (kind === 'herringbone') {
+        el.style.display = 'block';
+        el.innerHTML = `
+          <label>Strength
+            <select onchange="D.${side}Setup.thinkTime = parseFloat(this.value)">
+              <option value="2">Easy (2s)</option>
+              <option value="5" selected>Normal (5s)</option>
+              <option value="10">Hard (10s)</option>
+            </select>
+          </label>`;
+      } else if (kind === 'astrid') {
+        el.style.display = 'block';
+        el.innerHTML = `
+          <label>Iterations
+            <select onchange="D.${side}Setup.iterations = parseInt(this.value)">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="400">400</option>
+            </select>
+          </label>`;
+      } else {
+        el.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

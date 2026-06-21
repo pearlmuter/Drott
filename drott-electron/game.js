@@ -164,6 +164,36 @@ function _flashStatus(msg) {
 
 const _ipc = typeof require !== 'undefined' ? require('electron').ipcRenderer : null;
 
+const _clip = typeof require !== 'undefined' ? require('electron').clipboard : null;
+
+D.copyMoves = function() {
+  if (!D.moveHistory.length) return;
+  const lines = [];
+  for (let i = 0; i < D.moveHistory.length; i += 2) {
+    const num = Math.floor(i / 2) + 1;
+    const red = D.moveHistory[i].notation;
+    const blk = D.moveHistory[i + 1] ? D.moveHistory[i + 1].notation : '';
+    lines.push(blk ? `${num}. ${red}  ${blk}` : `${num}. ${red}`);
+  }
+  if (_clip) _clip.writeText(lines.join('\n'));
+};
+
+D.pasteMoves = function() {
+  if (!_clip) return;
+  const text = _clip.readText();
+  const tokens = [...text.matchAll(/[A-I][1-9][x\-][A-I][1-9]/g)].map(m => m[0]);
+  if (!tokens.length) { alert('No moves found in clipboard.'); return; }
+  D.startGame();
+  for (const tok of tokens) {
+    const fc = COLS.indexOf(tok[0]), fr = parseInt(tok[1]) - 1;
+    const tc = COLS.indexOf(tok[3]), tr = parseInt(tok[4]) - 1;
+    const legal = D.legalMoves(D.board);
+    const match = legal.find(([f, t]) => f[0]===fc && f[1]===fr && t[0]===tc && t[1]===tr);
+    if (!match) { alert(`Illegal move: ${tok}`); return; }
+    executeMove(match);
+  }
+};
+
 D.saveGame = async function() {
   if (!D.moveHistory.length) return;
   const lines = [

@@ -25,8 +25,13 @@ const _sessions = {};
 async function _getSession(modelName) {
   if (_sessions[modelName]) return _sessions[modelName];
   if (!ort) throw new Error('onnxruntime-node not available');
+  const fs = require('fs');
   const modelPath = path.join(base, 'onnx_models', `${modelName}.onnx`);
-  const sess = await ort.InferenceSession.create(modelPath);
+  // Read via Node.js fs so Electron's ASAR shim can locate the file inside the
+  // archive; then pass the buffer so onnxruntime's native C++ never touches the
+  // path itself (it can't read ASAR paths directly).
+  const modelBuffer = fs.readFileSync(modelPath);
+  const sess = await ort.InferenceSession.create(modelBuffer);
   _sessions[modelName] = sess;
   return sess;
 }

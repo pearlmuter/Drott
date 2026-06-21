@@ -15,7 +15,7 @@
       <div class="sidebar-head">
         <h1 class="title">DROTT</h1>
         <p class="subtitle">A Norse Strategy Game</p>
-        <p class="version-label">v0.201</p>
+        <p class="version-label">v0.202</p>
       </div>
 
       <div class="section">
@@ -219,7 +219,13 @@
       } else if (kind === 'astrid') {
         el.style.display = 'block';
         el.innerHTML = `
-          <label>Iterations
+          <label>Model
+            <select onchange="D.${side}Setup.model = this.value">
+              <option value="astrid_v1">Astrid v1</option>
+              <option value="astrid_v0">Astrid v0</option>
+            </select>
+          </label>
+          <label style="margin-top:4px">Iterations
             <select onchange="D.${side}Setup.iterations = parseInt(this.value)">
               <option value="50">50</option>
               <option value="100" selected>100</option>

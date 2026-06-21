@@ -20,8 +20,8 @@ D.boardHistory  = [];   // board snapshot after each half-move (index 0 = start 
 D.viewIndex     = null; // null = live; number = browsing historical position
 D.showAttackMap = false;
 
-D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v0', iterations: 100 };
-D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v0', iterations: 100 };
+D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
+D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
 
 const COLS = 'ABCDEFGHI';
 function moveNotation(move) {

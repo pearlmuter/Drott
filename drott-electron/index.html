@@ -15,7 +15,7 @@
       <div class="sidebar-head">
         <h1 class="title">DROTT</h1>
         <p class="subtitle">A Norse Strategy Game</p>
-        <p class="version-label">v0.203</p>
+        <p class="version-label">v0.204</p>
       </div>
 
       <div class="section">
@@ -186,11 +186,13 @@
     </div>
   </div>
 
-  <!-- Load order matters: board-state → rules → AI → renderer → dispatch -->
+  <!-- Load order matters: board-state → rules → AI → hud → game → renderer → dispatch -->
   <script src="board-state.js"></script>
   <script src="drott-rules.js"></script>
   <script src="herringbone-ai.js"></script>
   <script src="onnx-ai.js"></script>
+  <script src="hud.js"></script>
+  <script src="game.js"></script>
   <script src="renderer.js"></script>
   <script src="ai-dispatch.js"></script>
 

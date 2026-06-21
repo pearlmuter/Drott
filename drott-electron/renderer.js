@@ -1,4 +1,4 @@
-// renderer.js — SVG board, piece rendering, click handling, game state machine
+// renderer.js — SVG board, piece rendering, click/drag, highlights, navigation
 ;(function() {
 const D = (typeof window !== 'undefined' ? window : globalThis).D =
   (typeof window !== 'undefined' ? window : globalThis).D || {};
@@ -6,28 +6,6 @@ const D = (typeof window !== 'undefined' ? window : globalThis).D =
 const NS      = 'http://www.w3.org/2000/svg';
 const SQ      = 70;
 const BOARD_PX = SQ * 9; // 630
-
-D.board         = null;
-D.selected      = null;
-D.validMoves    = [];
-D.repCounts     = {};
-D.gamePhase     = 'setup';
-D.moveHistory   = [];   // [{notation, side}]
-D.capturedRed   = [];   // piece types Red captured (i.e. Black pieces taken)
-D.capturedBlack = [];   // piece types Black captured (i.e. Red pieces taken)
-D.lastMove      = null; // [[fromCol,fromRow],[toCol,toRow]] of the most recent move
-D.boardHistory  = [];   // board snapshot after each half-move (index 0 = start pos)
-D.viewIndex     = null; // null = live; number = browsing historical position
-D.showAttackMap = false;
-
-D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
-D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
-
-const COLS = 'ABCDEFGHI';
-function moveNotation(move) {
-  const [[fc, fr], [tc, tr], cap] = move;
-  return `${COLS[fc]}${fr + 1}${cap ? 'x' : '-'}${COLS[tc]}${tr + 1}`;
-}
 
 // --- SVG piece loading (Node.js, available in Electron renderer) ---
 const _fs   = typeof require !== 'undefined' ? require('fs')   : null;
@@ -67,7 +45,6 @@ function squareCat(col, row) {
   return 'normal';
 }
 
-// Colors: normal cream → fort (darker shade) → zone (slightly golden) → castle (amber)
 const COL = {
   normal : '#EDE4CC',
   fort   : '#C0A878',
@@ -125,14 +102,11 @@ function initBoard() {
   }
   defs.appendChild(castlePat);
 
-  // All board drawing goes inside this group (container div clips rounded corners)
   const bg = el('g');
   svg.appendChild(bg);
 
-  // Board gap fill (shows between rounded squares)
   bg.appendChild(sa(el('rect'), { width: BOARD_PX, height: BOARD_PX, fill: '#2a2010' }));
 
-  // All 81 squares as individual rounded rects — 3px gap between squares, rx = 12
   const G = 1.5, RX = 12;
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
@@ -149,25 +123,19 @@ function initBoard() {
     }
   }
 
-  // Castle ring marker
   const [ccx, ccy] = colRowToXY(4, 4);
   bg.appendChild(sa(el('circle'), {
     cx:ccx, cy:ccy, r:8,
     fill:'none', stroke:'rgba(80,50,0,0.45)', 'stroke-width':1.8,
   }));
 
-  // Coordinate labels rendered outside SVG as HTML (see initCoordLabels)
-
-  // Highlight layer (below pieces)
   highlightLayer = el('g');
   bg.appendChild(highlightLayer);
 
-  // Piece layer
   pieceLayer = el('g');
   pieceLayer.style.pointerEvents = 'none';
   bg.appendChild(pieceLayer);
 
-  // Click + drag layer
   const clickLayer = el('g');
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
@@ -234,7 +202,6 @@ function showHighlights() {
       }));
     }
   }
-  // Attack map overlay
   if (D.showAttackMap) {
     const brd = viewBoard();
     if (brd) {
@@ -260,14 +227,12 @@ function showHighlights() {
 
   if (!D.selected) return;
   const [sc, sr] = D.selected;
-  // Selection ring
   const sx = sc * SQ, sy = (8 - sr) * SQ;
   highlightLayer.appendChild(sa(el('rect'), {
     x:sx+2, y:sy+2, width:SQ-4, height:SQ-4,
     fill:'rgba(255,220,0,0.18)', stroke:'rgba(255,200,0,0.85)',
     'stroke-width':2.5, rx:3,
   }));
-  // Move dots / capture rings
   for (const move of D.validMoves) {
     const [, to, isCapture] = move;
     const [cx, cy] = colRowToXY(to[0], to[1]);
@@ -295,8 +260,6 @@ function viewBoard() {
 }
 
 function _historyMove(idx) {
-  // Recover from/to from the notation stored at moveHistory[idx-1]
-  // We store full squares in boardHistory so we can diff
   const prev = D.boardHistory[idx - 1];
   const curr = D.boardHistory[idx];
   let from = null, to = null;
@@ -309,40 +272,6 @@ function _historyMove(idx) {
 }
 
 // --- Navigation ---
-function _evalAtIndex(idx) {
-  if (!D.evalHistory) return undefined;
-  // evalHistory is sparse — walk back to find the nearest recorded value
-  for (let i = idx; i >= 0; i--) {
-    if (D.evalHistory[i] !== undefined) return D.evalHistory[i];
-  }
-  return undefined;
-}
-
-function _syncEvalBar(viewIdx) {
-  const pos = viewIdx !== null ? viewIdx : (D.boardHistory ? D.boardHistory.length - 1 : 0);
-  const bar = document.getElementById('eval-bar-black');
-  const evalLine = document.getElementById('eval-line');
-  const val = _evalAtIndex(pos);
-  if (val === undefined) {
-    if (bar) bar.style.height = '50%';
-    if (evalLine) evalLine.textContent = '';
-    return;
-  }
-  const MAX_CP = 800;
-  const pct = Math.max(0, Math.min(1, (val + MAX_CP) / (2 * MAX_CP)));
-  if (bar) bar.style.height = `${((1 - pct) * 100).toFixed(1)}%`;
-  if (evalLine) {
-    const MATE = 100000;
-    if (Math.abs(val) >= MATE - 200) {
-      const m = Math.ceil((MATE - Math.abs(val)) / 2);
-      evalLine.textContent = val > 0 ? `#${m}` : `-#${m}`;
-    } else {
-      const cp = (val / 100).toFixed(2);
-      evalLine.textContent = val >= 0 ? `+${cp}` : `${cp}`;
-    }
-  }
-}
-
 D.navTo = function(idx) {
   if (!D.boardHistory.length) return;
   if (idx === null || idx >= D.boardHistory.length - 1) {
@@ -351,13 +280,11 @@ D.navTo = function(idx) {
     D.viewIndex = Math.max(0, idx);
   }
   D.selected = null; D.validMoves = [];
-  renderPieces(); showHighlights(); updateMoveList();
-  if (D._postGameReview || D.analysisMode) _syncEvalBar(D.viewIndex);
+  renderPieces(); showHighlights(); D.updateMoveList();
+  if (D._postGameReview || D.analysisMode) D.syncEvalBar(D.viewIndex);
 };
 D.navBack    = function() { D.navTo(D.viewIndex !== null ? D.viewIndex - 1 : D.boardHistory.length - 2); };
 D.navForward = function() { D.navTo(D.viewIndex !== null ? D.viewIndex + 1 : null); };
-
-D.analysisMode = false;
 
 D.toggleAnalysis = function() {
   D.analysisMode = !D.analysisMode;
@@ -366,12 +293,12 @@ D.toggleAnalysis = function() {
   D.selected = null; D.validMoves = [];
   const evalWrap = document.getElementById('eval-bar-wrap');
   if (evalWrap) evalWrap.style.display = (D.analysisMode || D._postGameReview) ? '' : 'none';
-  showHighlights(); updateHUD();
+  showHighlights(); D.updateHUD();
 };
 
 function handleSquareClick(col, row) {
   if (D.viewIndex !== null) return;
-  if (checkPendingWin()) return;
+  if (D.checkPendingWin()) return;
 
   // Analysis mode: free movement of any piece, no AI trigger, no rules enforcement
   if (D.analysisMode) {
@@ -401,7 +328,7 @@ function handleSquareClick(col, row) {
 
   if (D.selected) {
     const move = D.validMoves.find(m => m[1][0] === col && m[1][1] === row);
-    if (move) { executeMove(move); return; }
+    if (move) { D.executeMove(move); return; }
     if (sq && sq.side === D.board.sideToMove) { selectPiece(col, row); return; }
     D.selected = null; D.validMoves = []; showHighlights();
     return;
@@ -410,7 +337,7 @@ function handleSquareClick(col, row) {
 }
 
 // --- Drag to move ---
-let _drag = null; // { col, row, ghost, offsetX, offsetY }
+let _drag = null;
 
 function onDragStart(e) {
   if (D.viewIndex !== null) return;
@@ -428,7 +355,6 @@ function onDragStart(e) {
   e.preventDefault();
   selectPiece(col, row);
 
-  // Create floating ghost image
   const size = SQ * 0.88;
   const ghost = document.createElement('img');
   ghost.src = _pieceSVGUri(sq.type, sq.side);
@@ -460,7 +386,6 @@ function onDragEnd(e) {
   if (!_drag) return;
   _drag.ghost.remove();
 
-  // Determine which square the cursor is over
   const { svgRect } = _drag;
   const lx = e.clientX - svgRect.left, ly = e.clientY - svgRect.top;
   const tc = Math.floor(lx / SQ), tr = 8 - Math.floor(ly / SQ);
@@ -469,15 +394,13 @@ function onDragEnd(e) {
   if (tc < 0 || tc > 8 || tr < 0 || tr > 8) { return; }
   const move = D.validMoves.find(m => m[1][0] === tc && m[1][1] === tr);
   if (move) {
-    executeMove(move);
+    D.executeMove(move);
   }
-  // Leave selection visible if no valid destination (same as click behaviour)
 }
 
 function selectPiece(col, row) {
   D.selected = [col, row];
   if (D.analysisMode) {
-    // In analysis mode, generate moves for whichever side owns the piece
     const sq = D.board.squares[col + row * D.N];
     if (sq) {
       const tempBoard = { ...D.board, sideToMove: sq.side };
@@ -491,191 +414,6 @@ function selectPiece(col, row) {
     D.validMoves = all.filter(m => m[0][0] === col && m[0][1] === row);
   }
   showHighlights();
-}
-
-function checkPendingWin() {
-  if (!D._pendingWin) return false;
-  const pw = D._pendingWin; D._pendingWin = null;
-  endGame(pw.winner, pw.reason);
-  return true;
-}
-
-function executeMove(move) {
-  if (checkPendingWin()) return;
-  const side = D.board.sideToMove;
-  if (move[2]) {  // capture: record captured piece before applying
-    const [, to] = move;
-    const cap = D.board.squares[to[0] + to[1] * D.N];
-    if (cap) (side === 'red' ? D.capturedRed : D.capturedBlack).push(cap.type);
-  }
-  D.moveHistory.push({ notation: moveNotation(move), side });
-  D.lastMove = [move[0], move[1]];
-  D.board = D.applyMove(D.board, move);
-  D.boardHistory.push(D.board);
-  D.viewIndex = null;
-  const key = D.repetitionKey(D.board).toString();
-  D.repCounts[key] = (D.repCounts[key] || 0) + 1;
-  D.selected = null; D.validMoves = [];
-  renderPieces(); showHighlights(); updateHUD(); updateMoveList(); updateCaptured();
-  if (D.board.winner) {
-    if (D.board.winReason === 'kingCapture') {
-      endGame(D.board.winner, D.board.winReason); return;
-    }
-    // castle/fort: defer — win fires at the START of the winner's next turn
-    D._pendingWin = { winner: D.board.winner, reason: D.board.winReason };
-    D.board = { ...D.board, winner: null, winReason: null };
-  }
-  if (D.repCounts[key] >= 3) { endGame(null, 'repetition'); return; }
-  scheduleAI();
-}
-
-// --- Game flow ---
-function _resetBoard() {
-  if (D.terminateHRWorker) D.terminateHRWorker();
-  D.isAILocked = false;
-  D.board = D.makeStartBoard();
-  D.repCounts = {};
-  D.selected = null; D.validMoves = [];
-  D.moveHistory = []; D.capturedRed = []; D.capturedBlack = []; D.lastMove = null;
-  D.boardHistory = [D.board]; D.viewIndex = null; D.evalHistory = [];
-  D._pendingWin = null; D._postGameReview = false; D.analysisMode = false;
-  const ab = document.getElementById('analyse-btn'); if (ab) ab.classList.remove('active');
-  document.getElementById('result-banner').style.display = 'none';
-  const evalWrap = document.getElementById('eval-bar-wrap');
-  if (evalWrap) evalWrap.style.display = 'none';
-  const evalGraph = document.getElementById('eval-graph-section');
-  if (evalGraph) evalGraph.style.display = 'none';
-  if (D.showEval) D.showEval(null);
-}
-
-// "New Game" — reset to setup state, show start position, no AI running.
-// Lets the user configure sides/strength before committing to play.
-D.newGame = function() {
-  _resetBoard();
-  D.gamePhase = 'setup';
-  clearHighlights(); renderPieces(); updateHUD(); updateMoveList(); updateCaptured();
-};
-
-// "Start" — begin playing from current configuration.
-// Also used internally (loadGame, resign replay) to start a fresh game.
-D.startGame = function() {
-  _resetBoard();
-  D.gamePhase = 'playing';
-  clearHighlights(); renderPieces(); updateHUD(); updateMoveList(); updateCaptured();
-  scheduleAI();
-};
-
-D.abortGame = function() {
-  if (D.gamePhase !== 'playing') return;
-  if (D.terminateHRWorker) D.terminateHRWorker();
-  D.isAILocked = false;
-  D._pendingWin = null;
-  D.gamePhase = 'finished';
-  clearHighlights();
-  updateHUD();
-};
-
-function endGame(winner, reason) {
-  D.gamePhase = 'finished';
-  D._postGameReview = true;
-  clearHighlights();
-  const evalWrap = document.getElementById('eval-bar-wrap');
-  if (evalWrap) evalWrap.style.display = '';
-  _drawEvalGraph();
-  const banner = document.getElementById('result-banner');
-  let text;
-  if (!winner) {
-    text = reason === 'agreement' ? 'Draw by agreement' : 'Draw by repetition';
-  } else {
-    const name = winner === 'red' ? 'Red' : 'Black';
-    const how = reason === 'kingCapture' ? 'captured the king'
-              : reason === 'castle'      ? 'reached the castle'
-              : reason === 'resign'      ? 'wins by resignation'
-              :                           'seized the fort';
-    text = `${name} wins — ${how}`;
-  }
-  banner.innerHTML = `<span>${text}</span><button class="banner-close" onclick="this.parentElement.style.display='none'" title="Dismiss">✕</button>`;
-  banner.style.display = 'block';
-}
-
-function updateHUD(thinking = false) {
-  if (!D.board) return;
-  const side = D.board.sideToMove === 'red' ? 'Red' : 'Black';
-  const el = document.getElementById('turn-label');
-  if (D.analysisMode) { el.textContent = 'Analysis'; el.classList.remove('thinking'); return; }
-  if (D.gamePhase !== 'playing') { el.textContent = ''; return; }
-  el.textContent = thinking ? `${side} is thinking…` : `${side}'s turn`;
-  el.classList.toggle('thinking', thinking);
-}
-
-D.setThinking = function(on) { updateHUD(on); };
-
-D.evalHistory = []; // { fromRed: number } per half-move matching boardHistory indices
-
-D.showEval = function(score, depth, side) {
-  const evalLine = document.getElementById('eval-line');
-  const bar = document.getElementById('eval-bar-black');
-  if (score === null) {
-    if (evalLine) evalLine.textContent = '';
-    if (bar) bar.style.height = '50%';
-    return;
-  }
-  const MATE = 100000;
-  const fromRed = side === 'red' ? score : -score;
-  let scoreStr;
-  if (Math.abs(score) >= MATE - 200) {
-    const movesToMate = Math.ceil((MATE - Math.abs(score)) / 2);
-    scoreStr = fromRed > 0 ? `#${movesToMate}` : `-#${movesToMate}`;
-  } else {
-    const cp = (fromRed / 100).toFixed(2);
-    scoreStr = fromRed >= 0 ? `+${cp}` : `${cp}`;
-  }
-  if (evalLine) evalLine.textContent = `${scoreStr}  depth ${depth}`;
-  if (bar) {
-    const MAX_CP = 800;
-    const pct = Math.max(0, Math.min(1, (fromRed + MAX_CP) / (2 * MAX_CP)));
-    // bar fills from top = black's share; remainder = red's share
-    bar.style.height = `${((1 - pct) * 100).toFixed(1)}%`;
-  }
-  const idx = D.boardHistory ? D.boardHistory.length - 1 : 0;
-  D.evalHistory[idx] = fromRed;
-  _drawEvalGraph();
-};
-
-function _drawEvalGraph() {
-  const svg = document.getElementById('eval-graph');
-  const section = document.getElementById('eval-graph-section');
-  if (!svg || !section) return;
-  if (!D._postGameReview) return;
-  const pts = D.evalHistory.filter(v => v !== undefined);
-  if (pts.length < 2) { section.style.display = 'none'; return; }
-  section.style.display = '';
-
-  const W = svg.clientWidth || 192, H = 44;
-  const MAX_CP = 800, MID = H / 2;
-  const xs = pts.map((_, i) => (i / (pts.length - 1)) * W);
-  const ys = pts.map(v => MID - Math.max(-MAX_CP, Math.min(MAX_CP, v)) / MAX_CP * MID);
-
-  // Midline
-  let d = `M 0 ${MID} L ${W} ${MID}`;
-  // Score line
-  const line = pts.map((_, i) => `${i === 0 ? 'M' : 'L'} ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
-  // Fill area
-  const fill = line + ` L ${xs[xs.length-1].toFixed(1)} ${MID} L 0 ${MID} Z`;
-
-  svg.innerHTML = `
-    <defs>
-      <linearGradient id="eg-grad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#b83030" stop-opacity="0.35"/>
-        <stop offset="50%" stop-color="#b83030" stop-opacity="0.1"/>
-        <stop offset="50%" stop-color="#171410" stop-opacity="0.1"/>
-        <stop offset="100%" stop-color="#171410" stop-opacity="0.35"/>
-      </linearGradient>
-    </defs>
-    <path d="${fill}" fill="url(#eg-grad)" stroke="none"/>
-    <path d="M 0 ${MID} L ${W} ${MID}" stroke="rgba(255,255,255,0.08)" stroke-width="1" fill="none"/>
-    <path d="${line}" stroke="#8b6f47" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
-  `;
 }
 
 // --- Piece legend ---
@@ -703,130 +441,9 @@ D.buildPieceLegend = function() {
     </div>`).join('');
 };
 
-function scheduleAI() {
-  if (typeof D.triggerAIIfNeeded === 'function') D.triggerAIIfNeeded();
-}
-
-// --- Move list ---
-function updateMoveList() {
-  const el = document.getElementById('move-list');
-  if (!el) return;
-  const moves = D.moveHistory;
-  if (!moves.length) { el.innerHTML = ''; return; }
-  // viewIndex: null = live (highlight last), number = highlight that half-move
-  const activeHalf = D.viewIndex !== null ? D.viewIndex - 1 : moves.length - 1;
-  let html = '';
-  for (let i = 0; i < moves.length; i += 2) {
-    const num = Math.floor(i / 2) + 1;
-    const redN = moves[i]?.notation ?? '';
-    const blkN = moves[i + 1]?.notation ?? '';
-    const hiR = i === activeHalf ? ' ml-active' : '';
-    const hiB = i + 1 === activeHalf ? ' ml-active' : '';
-    html += `<tr>` +
-      `<td class="ml-num">${num}.</td>` +
-      `<td class="ml-red${hiR}" onclick="D.navTo(${i + 1})">${redN}</td>` +
-      `<td class="ml-black${hiB}" onclick="D.navTo(${i + 2})">${blkN}</td>` +
-      `</tr>`;
-  }
-  el.innerHTML = html;
-  // Scroll to keep active row visible
-  const activeEl = el.querySelector('.ml-active');
-  if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
-  else el.parentElement.scrollTop = el.parentElement.scrollHeight;
-}
-
-// --- Captured pieces ---
-const PIECE_LABELS = {
-  king:'K', berserker:'Be', spearman:'Sp', bowman:'Bo',
-  elf:'El', wolf:'Wo', dwarf:'Dw', hunter:'Hu', skjolding:'Sk',
-};
-function updateCaptured() {
-  const rEl = document.getElementById('cap-red');
-  const bEl = document.getElementById('cap-black');
-  if (rEl) rEl.textContent = D.capturedRed.map(t => PIECE_LABELS[t] || t).join(' ');
-  if (bEl) bEl.textContent = D.capturedBlack.map(t => PIECE_LABELS[t] || t).join(' ');
-}
-
-D.resign = function() {
-  if (D.gamePhase !== 'playing') return;
-  const loser = D.board.sideToMove;
-  endGame(loser === 'red' ? 'black' : 'red', 'resign');
-};
-
-D.offerDraw = function() {
-  if (D.gamePhase !== 'playing') return;
-  const humanSide = D.board.sideToMove;
-  const oppSetup = humanSide === 'red' ? D.blackSetup : D.redSetup;
-  const humanSetup = humanSide === 'red' ? D.redSetup : D.blackSetup;
-  if (humanSetup.kind !== 'human') return; // only human can offer
-
-  if (oppSetup.kind === 'human') {
-    // Human vs human: ask the other player
-    if (window.confirm('Accept draw?')) endGame(null, 'agreement');
-  } else {
-    // Human vs AI: AI accepts if it's not clearly winning (eval ≤ +80 from AI's pov)
-    const aiSide = humanSide === 'red' ? 'black' : 'red';
-    let aiScore = 0;
-    if (D.HR && D.HR.evaluate) aiScore = D.HR.evaluate(D.board, aiSide);
-    if (aiScore <= 80) {
-      endGame(null, 'agreement');
-    } else {
-      flashStatus('Draw declined');
-    }
-  }
-};
-
-function flashStatus(msg) {
-  const el = document.getElementById('turn-label');
-  const prev = el.textContent;
-  el.textContent = msg;
-  el.style.color = 'var(--muted)';
-  setTimeout(() => { el.textContent = prev; el.style.color = ''; }, 2000);
-}
-
-// --- Save / Load ---
-const _ipc = typeof require !== 'undefined' ? require('electron').ipcRenderer : null;
-
-D.saveGame = async function() {
-  if (!D.moveHistory.length) return;
-  const lines = [
-    'DROTT',
-    `Red: ${D.redSetup.kind}`,
-    `Black: ${D.blackSetup.kind}`,
-    '',
-  ];
-  for (let i = 0; i < D.moveHistory.length; i += 2) {
-    const num = Math.floor(i / 2) + 1;
-    const red = D.moveHistory[i].notation;
-    const blk = D.moveHistory[i + 1] ? D.moveHistory[i + 1].notation : '';
-    lines.push(blk ? `${num}. ${red}  ${blk}` : `${num}. ${red}`);
-  }
-  if (_ipc) await _ipc.invoke('drott-save', lines.join('\n') + '\n');
-};
-
-D.loadGame = async function() {
-  if (!_ipc) return;
-  const res = await _ipc.invoke('drott-open');
-  if (!res.ok) return;
-
-  const tokens = [...res.content.matchAll(/[A-I][1-9][x\-][A-I][1-9]/g)].map(m => m[0]);
-  if (!tokens.length) { alert('No moves found in file.'); return; }
-
-  D.startGame();
-  const COLS = 'ABCDEFGHI';
-  for (const tok of tokens) {
-    const fc = COLS.indexOf(tok[0]), fr = parseInt(tok[1]) - 1;
-    const tc = COLS.indexOf(tok[3]), tr = parseInt(tok[4]) - 1;
-    const legal = D.legalMoves(D.board);
-    const match = legal.find(([f, t]) => f[0]===fc && f[1]===fr && t[0]===tc && t[1]===tr);
-    if (!match) { alert(`Illegal move in file: ${tok}`); return; }
-    executeMove(match);
-  }
-};
-
 window.addEventListener('DOMContentLoaded', () => {
   initBoard();
-  D.newGame(); // show start position in setup state; user clicks Start when ready
+  D.newGame();
 });
 
 document.addEventListener('keydown', e => {
@@ -839,11 +456,8 @@ document.addEventListener('keydown', e => {
 
 D.colRowToXY      = colRowToXY;
 D.renderPieces    = renderPieces;
-D.executeMove     = executeMove;
-D.updateHUD       = updateHUD;
-D.updateMoveList  = updateMoveList;
-D.updateCaptured  = updateCaptured;
-D.checkPendingWin = checkPendingWin;
+D.clearHighlights = clearHighlights;
+D.showHighlights  = showHighlights;
 D.SQ = SQ;
 
 if (typeof module !== 'undefined' && module.exports) {

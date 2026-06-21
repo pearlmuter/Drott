@@ -10,8 +10,9 @@ let _gen = 0;
 
 D.terminateHRWorker = function() {
   _gen++;
-  // Kill the fork child so the search stops immediately, freeing CPU.
-  try { require('electron').ipcRenderer.invoke('hr-abort'); } catch (_) {}
+  const { ipcRenderer } = require('electron');
+  try { ipcRenderer.invoke('hr-abort'); } catch (_) {}
+  try { ipcRenderer.invoke('astrid-abort'); } catch (_) {}
 };
 
 function hrSearch(board, thinkTime) {
@@ -19,6 +20,15 @@ function hrSearch(board, thinkTime) {
   return ipcRenderer.invoke('hr-search', {
     board: JSON.parse(JSON.stringify(board)),
     thinkTime,
+  });
+}
+
+function astridSearch(board, modelName, iterations) {
+  const { ipcRenderer } = require('electron');
+  return ipcRenderer.invoke('astrid-search', {
+    board: JSON.parse(JSON.stringify(board)),
+    modelName: modelName || 'astrid_v1',
+    iterations: iterations || 100,
   });
 }
 
@@ -50,9 +60,13 @@ async function runAITurn(side, setup) {
         console.error('HR search error:', result.error);
       }
     } else if (setup.kind === 'astrid') {
-      move = typeof D.astridMove === 'function'
-        ? await D.astridMove(D.board, setup.model, setup.iterations)
-        : randomMove(D.board);
+      const result = await astridSearch(D.board, setup.model, setup.iterations);
+      if (_gen !== myGen) return;
+      if (result && result.move) {
+        move = result.move;
+      } else if (result && result.error) {
+        console.error('Astrid search error:', result.error);
+      }
     }
     if (move && D.gamePhase === 'playing' && D.board.sideToMove === side) {
       D.executeMove(move);

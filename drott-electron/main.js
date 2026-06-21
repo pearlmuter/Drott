@@ -54,6 +54,45 @@ ipcMain.handle('hr-search', (event, { board, thinkTime }) => {
 ipcMain.handle('hr-abort', () => { _killHR(); return null; });
 
 // ---------------------------------------------------------------------------
+// Astrid AI — same fork pattern; child runs onnxruntime-node + MCTS in its
+// own OS process so the renderer never blocks during neural net inference.
+// ---------------------------------------------------------------------------
+let _astridChild   = null;
+let _astridResolve = null;
+
+function _killAstrid() {
+  if (_astridChild) { try { _astridChild.kill(); } catch (_) {} _astridChild = null; }
+  if (_astridResolve) { _astridResolve(null); _astridResolve = null; }
+}
+
+function _astridProcess() {
+  if (_astridChild && !_astridChild.killed) return _astridChild;
+  _astridChild = fork(
+    path.join(__dirname, 'astrid-fork.js'),
+    [],
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
+  );
+  _astridChild.on('message', (result) => {
+    if (_astridResolve) { const r = _astridResolve; _astridResolve = null; r(result); }
+  });
+  _astridChild.on('error', (err) => {
+    console.error('Astrid fork error:', err);
+    if (_astridResolve) { const r = _astridResolve; _astridResolve = null; r({ error: String(err) }); }
+    _astridChild = null;
+  });
+  _astridChild.on('exit', () => {
+    _astridChild = null;
+    if (_astridResolve) { const r = _astridResolve; _astridResolve = null; r({ error: 'Astrid process exited' }); }
+  });
+  return _astridChild;
+}
+
+ipcMain.handle('astrid-search', (event, { board, modelName, iterations }) =>
+  new Promise((resolve) => { _astridResolve = resolve; _astridProcess().send({ board, modelName, iterations }); }));
+
+ipcMain.handle('astrid-abort', () => { _killAstrid(); return null; });
+
+// ---------------------------------------------------------------------------
 
 function createWindow() {
   const win = new BrowserWindow({

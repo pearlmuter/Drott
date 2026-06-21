@@ -13,6 +13,7 @@ Run:  python3 train_drott.py            # tiny smoke config (~minutes on MPS)
 
 import argparse
 import os
+import subprocess
 import sys
 from collections import deque
 from random import shuffle
@@ -155,6 +156,10 @@ def main():
     ap.add_argument("--checkpoint", default="temp")
     ap.add_argument("--device", default="cpu",
                     help="cpu (fastest for batch-1 MCTS) | mps | cuda")
+    ap.add_argument("--export-every", type=int, default=0, metavar="N",
+                    help="export an ONNX snapshot every N accepted iterations (0=off)")
+    ap.add_argument("--out-dir", default=None,
+                    help="ONNX output dir for --export-every (default: ../drott-electron/onnx_models)")
     a = ap.parse_args()
 
     game = DrottGame()
@@ -191,6 +196,7 @@ def main():
         nnet.train(train_examples)
 
         # Accept/reject gate: keep the new net only if it actually beats the old.
+        accepted = False
         if a.arena > 0:
             nw, ow, dr = evaluate_head_to_head(game, nnet, pnet, a.arena, a.sims, a.maxmoves)
             decisive = nw + ow
@@ -202,8 +208,25 @@ def main():
             else:
                 print(f"iter {it} arena: new {nw} / old {ow} / draw {dr} -> ACCEPT")
                 nnet.save_checkpoint(a.checkpoint, f"checkpoint_{it}.pth.tar")
+                accepted = True
         else:
             nnet.save_checkpoint(a.checkpoint, f"checkpoint_{it}.pth.tar")
+            accepted = True
+
+        if accepted and a.export_every > 0 and it % a.export_every == 0:
+            cp_path = os.path.join(a.checkpoint, f"checkpoint_{it}.pth.tar")
+            _here = os.path.dirname(os.path.abspath(__file__))
+            out_dir = a.out_dir or os.path.join(_here, "..", "drott-electron", "onnx_models")
+            out_path = os.path.join(out_dir, f"astrid_it{it}.onnx")
+            print(f"iter {it}: exporting ONNX snapshot → {out_path}")
+            try:
+                subprocess.run(
+                    [sys.executable, os.path.join(_here, "export_onnx.py"),
+                     cp_path, out_path, "--channels", str(a.channels)],
+                    check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                print(f"WARNING: ONNX export failed for iter {it}: {e}")
 
         res = evaluate_vs_random(game, nnet, a.eval, a.evalsims, a.maxmoves)
         total = sum(res)

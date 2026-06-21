@@ -111,6 +111,27 @@ function createWindow() {
   win.loadFile('index.html');
 }
 
+ipcMain.handle('drott-list-models', () => {
+  const dir = path.join(__dirname, 'onnx_models');
+  try {
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.onnx'))
+      .map(f => f.slice(0, -5))   // strip .onnx
+      .sort((a, b) => {
+        // v-series (astrid_v0, astrid_v1) before it-series (astrid_it5, astrid_it10).
+        const av = a.match(/^astrid_v(\d+)$/), bv = b.match(/^astrid_v(\d+)$/);
+        const ai = a.match(/^astrid_it(\d+)$/), bi = b.match(/^astrid_it(\d+)$/);
+        if (av && bv) return parseInt(av[1]) - parseInt(bv[1]);
+        if (ai && bi) return parseInt(ai[1]) - parseInt(bi[1]);
+        if (av) return -1;   // v before it
+        if (bv) return 1;
+        return a.localeCompare(b);
+      });
+  } catch (_) {
+    return ['astrid_v1', 'astrid_v0'];
+  }
+});
+
 ipcMain.handle('drott-save', async (event, content) => {
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'Save Game',

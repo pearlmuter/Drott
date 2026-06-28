@@ -107,7 +107,7 @@ function createWindow() {
       contextIsolation: false,
     },
   });
-  if (app.dock) app.dock.setIcon(path.join(__dirname, 'assets', 'drott-icon.png'));
+  if (app.dock) app.dock.setIcon(path.join(__dirname, 'assets', 'drott-icon-1024.png'));
   win.loadFile('index.html');
 }
 

@@ -17,6 +17,7 @@ D.boardHistory  = [];
 D.viewIndex     = null;
 D.showAttackMap = false;
 D.analysisMode  = false;
+D.autoFlip      = false;
 
 D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
 D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
@@ -61,6 +62,11 @@ function executeMove(move) {
     D.board = { ...D.board, winner: null, winReason: null };
   }
   if (D.repCounts[key] >= 3) { endGame(null, 'repetition'); return; }
+  // Auto-flip for hotseat: keep the active player's pieces at the bottom
+  if (D.autoFlip && D.redSetup.kind === 'human' && D.blackSetup.kind === 'human' && D.flipBoard) {
+    const needFlipped = D.board.sideToMove === 'black';
+    if (D.flipped !== needFlipped) D.flipBoard();
+  }
   if (D.triggerAIIfNeeded) D.triggerAIIfNeeded();
 }
 
@@ -114,8 +120,22 @@ D.newGame = function() {
 D.startGame = function() {
   _resetBoard();
   D.gamePhase = 'playing';
+  // Auto-flip on: start from Red's perspective (Red always moves first)
+  if (D.autoFlip && D.flipped && D.flipBoard) D.flipBoard();
   D.clearHighlights(); D.renderPieces(); D.updateHUD(); D.updateMoveList(); D.updateCaptured();
   if (D.triggerAIIfNeeded) D.triggerAIIfNeeded();
+};
+
+D.toggleAutoFlip = function() {
+  D.autoFlip = !D.autoFlip;
+  const btn = document.getElementById('auto-flip-btn');
+  if (btn) btn.classList.toggle('active', D.autoFlip);
+  // Snap to correct orientation immediately if mid-game hotseat
+  if (D.autoFlip && D.gamePhase === 'playing' && D.flipBoard &&
+      D.redSetup.kind === 'human' && D.blackSetup.kind === 'human') {
+    const needFlipped = D.board && D.board.sideToMove === 'black';
+    if (D.flipped !== needFlipped) D.flipBoard();
+  }
 };
 
 D.abortGame = function() {

@@ -26,12 +26,17 @@ function _pieceSVGUri(type, side) {
   return _svgCache[key];
 }
 
-// --- Coord helpers ---
+// --- Coord helpers (flip-aware; D.flipped=false keeps Red at the bottom) ---
+function vCol(col) { return D.flipped ? 8 - col : col; }
+function vRow(row) { return D.flipped ? 8 - row : row; }
+function px(col) { return vCol(col) * SQ; }
+function py(row) { return (8 - vRow(row)) * SQ; }
 function colRowToXY(col, row) {
-  return [col * SQ + SQ / 2, (8 - row) * SQ + SQ / 2];
+  return [px(col) + SQ / 2, py(row) + SQ / 2];
 }
 function xyToColRow(x, y) {
-  return [Math.floor(x / SQ), 8 - Math.floor(y / SQ)];
+  const c = Math.floor(x / SQ), r = 8 - Math.floor(y / SQ);
+  return D.flipped ? [8 - c, 8 - r] : [c, r];
 }
 
 // --- Square category ---
@@ -60,6 +65,7 @@ function sa(e, attrs) { for (const [k, v] of Object.entries(attrs)) e.setAttribu
 // --- Board initialisation ---
 function initBoard() {
   const container = document.getElementById('board-container');
+  container.innerHTML = '';   // safe to rebuild (used when flipping)
   svg = sa(el('svg'), {
     width: BOARD_PX, height: BOARD_PX,
     viewBox: `0 0 ${BOARD_PX} ${BOARD_PX}`,
@@ -111,7 +117,7 @@ function initBoard() {
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
       const cat = squareCat(col, row);
-      const x = col * SQ + G, y = (8 - row) * SQ + G;
+      const x = px(col) + G, y = py(row) + G;
       const w = SQ - G * 2, h = SQ - G * 2;
       bg.appendChild(sa(el('rect'), { x, y, width:w, height:h, fill:COL[cat], rx:RX }));
       if (cat !== 'normal') {
@@ -140,7 +146,7 @@ function initBoard() {
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
       const r = sa(el('rect'), {
-        x:col*SQ, y:(8-row)*SQ, width:SQ, height:SQ, fill:'transparent',
+        x:px(col), y:py(row), width:SQ, height:SQ, fill:'transparent',
       });
       r.dataset.col = col; r.dataset.row = row;
       r.addEventListener('click', onSquareClick);
@@ -197,7 +203,7 @@ function showHighlights() {
   if (tintMove) {
     for (const [lc, lr] of tintMove) {
       highlightLayer.appendChild(sa(el('rect'), {
-        x: lc*SQ + 1.5, y: (8-lr)*SQ + 1.5, width: SQ - 3, height: SQ - 3,
+        x: px(lc) + 1.5, y: py(lr) + 1.5, width: SQ - 3, height: SQ - 3,
         fill: 'rgba(220,185,20,0.50)', rx: 11,
       }));
     }
@@ -211,7 +217,7 @@ function showHighlights() {
         const r = red[i], b = blk[i];
         if (!r && !b) continue;
         const col = i % 9, row = Math.floor(i / 9);
-        const x = col * SQ, y = (8 - row) * SQ;
+        const x = px(col), y = py(row);
         if (r > b) {
           const alpha = Math.min(r / maxCount, 1) * 0.35;
           highlightLayer.appendChild(sa(el('rect'), { x, y, width:SQ, height:SQ, fill:`rgba(180,40,40,${alpha.toFixed(2)})` }));
@@ -227,7 +233,7 @@ function showHighlights() {
 
   if (!D.selected) return;
   const [sc, sr] = D.selected;
-  const sx = sc * SQ, sy = (8 - sr) * SQ;
+  const sx = px(sc), sy = py(sr);
   highlightLayer.appendChild(sa(el('rect'), {
     x:sx+2, y:sy+2, width:SQ-4, height:SQ-4,
     fill:'rgba(255,220,0,0.18)', stroke:'rgba(255,200,0,0.85)',
@@ -388,7 +394,8 @@ function onDragEnd(e) {
 
   const { svgRect } = _drag;
   const lx = e.clientX - svgRect.left, ly = e.clientY - svgRect.top;
-  const tc = Math.floor(lx / SQ), tr = 8 - Math.floor(ly / SQ);
+  let tc = Math.floor(lx / SQ), tr = 8 - Math.floor(ly / SQ);
+  if (D.flipped) { tc = 8 - tc; tr = 8 - tr; }
   _drag = null;
 
   if (tc < 0 || tc > 8 || tr < 0 || tr > 8) { return; }
@@ -453,6 +460,20 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Home')       { e.preventDefault(); D.navTo(0); }
   if (e.key === 'End')        { e.preventDefault(); D.navTo(null); }
 });
+
+// --- Board flip (view only; never touches game state or rules) ---
+if (typeof D.flipped === 'undefined') D.flipped = false;
+D.flipBoard = function() {
+  D.flipped = !D.flipped;
+  initBoard();                 // rebuild squares/click-targets in the new orientation
+  renderPieces(); showHighlights();
+  for (const id of ['coord-nums', 'coord-letters']) {
+    const strip = document.getElementById(id);
+    if (strip) [...strip.children].reverse().forEach(c => strip.appendChild(c));
+  }
+  const btn = document.getElementById('flip-btn');
+  if (btn) btn.classList.toggle('active', D.flipped);
+};
 
 D.colRowToXY      = colRowToXY;
 D.renderPieces    = renderPieces;

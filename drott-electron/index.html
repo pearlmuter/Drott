@@ -15,7 +15,7 @@
       <div class="sidebar-head">
         <h1 class="title">DROTT</h1>
         <p class="subtitle">A Norse Strategy Game</p>
-        <p class="version-label">v0.206</p>
+        <p class="version-label">v0.212</p>
       </div>
 
       <div class="section">
@@ -66,12 +66,12 @@
       <div class="section move-list-section">
         <div class="move-list-header">
           <h3>Moves</h3>
-          <div class="move-list-actions">
-            <button class="icon-btn" onclick="D.copyMoves()" title="Copy moves">&#128203;</button>
-            <button class="icon-btn" onclick="D.pasteMoves()" title="Paste moves">&#128196;</button>
-            <button class="icon-btn" onclick="D.saveGame()" title="Save game">&#128190;</button>
-            <button class="icon-btn" onclick="D.loadGame()" title="Load game">&#128193;</button>
-          </div>
+        </div>
+        <div class="move-actions-row">
+          <button class="move-action-btn" onclick="D.copyMoves()" title="Copy moves to clipboard">Copy</button>
+          <button class="move-action-btn" onclick="D.pasteMoves()" title="Paste moves from clipboard">Paste</button>
+          <button class="move-action-btn" onclick="D.saveGame()" title="Save game to file">Save</button>
+          <button class="move-action-btn" onclick="D.loadGame()" title="Load game from file">Load</button>
         </div>
         <div class="move-list-scroll">
           <table id="move-list"></table>
@@ -84,81 +84,16 @@
         </div>
       </div>
 
-      <div class="tab-bar">
-        <button class="tab-btn active" id="tab-game" onclick="switchTab('game')">Game</button>
-        <button class="tab-btn" id="tab-rules" onclick="switchTab('rules')">Rules</button>
+      <div class="section" id="eval-graph-section" style="display:none">
+        <svg id="eval-graph" width="192" height="44" style="display:block;width:100%"></svg>
       </div>
 
-      <div id="panel-game">
-        <div class="section" id="eval-graph-section" style="display:none">
-          <svg id="eval-graph" width="192" height="44" style="display:block;width:100%"></svg>
-        </div>
-        <div class="section rules-section">
-          <h3>Win Conditions</h3>
-          <ul class="rules-list">
-            <li>Capture the enemy King</li>
-            <li>Move your King to the Castle</li>
-            <li>Occupy the enemy fort with no defenders</li>
-          </ul>
-        </div>
-      </div>
-
-      <div id="panel-rules" style="display:none">
-        <div class="section">
-          <div id="piece-legend"></div>
-        </div>
-        <div class="section rules-section">
-          <div class="rules-scroll">
-            <div class="rules-block">
-              <div class="rules-heading">HOW TO WIN</div>
-              <p>1. Capture the opponent's King.</p>
-              <p>2. Move your King onto the Castle (centre square) and survive until it is your turn again.</p>
-              <p>3. Have at least one of your pieces in the opponent's fort while they have no pieces in their own fort.</p>
-            </div>
-            <div class="rules-block">
-              <div class="rules-heading">MOVEMENT</div>
-              <p>Most pieces slide in a straight line and cannot jump over another piece.</p>
-              <p>The <b>Axe</b> and <b>Hunter</b> make a knight's leap. Legal only if a straight line from their square to the target doesn't cross an occupied square — pieces diagonally corner-to-corner also block.</p>
-              <p><b>Shieldwall:</b> a one-step diagonal move is blocked when both orthogonally adjacent squares are occupied.</p>
-              <p>Capture by landing on an enemy piece.</p>
-            </div>
-            <div class="rules-block">
-              <div class="rules-heading">SKJOLDING (V)</div>
-              <p>Advances two squares forward (square ahead must be clear), captures one square diagonally forward, steps one square back. Diagonally placed Skjoldings guard each other.</p>
-            </div>
-            <div class="rules-block">
-              <div class="rules-heading">OFFICERS</div>
-              <table class="piece-table">
-                <tr><td>K</td><td>King — one step any direction. Reaches Castle to win.</td></tr>
-                <tr><td>Sp</td><td>Spearman — wide reach ahead; narrow retreat.</td></tr>
-                <tr><td>Bw</td><td>Bowman — slides up to 4 forward; one step sideways.</td></tr>
-                <tr><td>Bk</td><td>Berserker — three forward lanes up to 3; one step sideways.</td></tr>
-                <tr><td>Sw</td><td>Sword — one step orthogonally, or diagonal slide up to 4.</td></tr>
-                <tr><td>Wo</td><td>Wolf — orthogonal slide up to 3.</td></tr>
-                <tr><td>Ax</td><td>Axe — short ortho/diagonal step, plus knight's leap.</td></tr>
-                <tr><td>Hu</td><td>Hunter — diagonal step, plus knight's leap.</td></tr>
-              </table>
-            </div>
-            <div class="rules-block">
-              <div class="rules-heading">STRATEGY</div>
-              <p>Hold the centre with Spearman, Bowman, Berserker to block the enemy King.</p>
-              <p>Develop Wolf and Hunter to the flanks first, Sword and Axe behind them.</p>
-              <p>The King's march to the Castle is a winning threat — guard your own Fort too.</p>
-              <p>Material edge? Press both flanks at once — one must give.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <script>
-        function switchTab(name) {
-          document.getElementById('panel-game').style.display  = name === 'game'  ? '' : 'none';
-          document.getElementById('panel-rules').style.display = name === 'rules' ? '' : 'none';
-          document.getElementById('tab-game').classList.toggle('active',  name === 'game');
-          document.getElementById('tab-rules').classList.toggle('active', name === 'rules');
-          if (name === 'rules' && D.buildPieceLegend) D.buildPieceLegend();
-        }
-      </script>
+      <button id="open-rules-btn" class="rules-open-btn" onclick="D.openRules()">
+        <span class="rules-open-icon">&#128214;</span> How to Play
+      </button>
+      <button id="open-sandbox-btn" class="rules-open-btn" onclick="D.toggleSandbox()">
+        <span class="rules-open-icon">&#9858;</span> Experiment
+      </button>
     </div>
 
     <!-- Right panel: board -->
@@ -183,8 +118,44 @@
         <div id="board-toolbar">
           <button id="analyse-btn" class="board-tool-btn" onclick="D.toggleAnalysis()" title="Free piece exploration">Analyse</button>
           <button id="attack-map-btn" class="board-tool-btn" onclick="D.toggleAttackMap()" title="Toggle attack map">Attack Map</button>
+          <button id="flip-btn" class="board-tool-btn" onclick="D.flipBoard()" title="Flip the board">&#8635; Flip</button>
+          <button id="auto-flip-btn" class="board-tool-btn" onclick="D.toggleAutoFlip()" title="Auto-flip after each move (hotseat)">&#8635; Auto</button>
         </div>
       </div>
+
+      <!-- Experiment / sandbox panel (replaces the board; driven by sandbox.js) -->
+      <div id="sandbox-panel" style="display:none">
+        <div class="sandbox-inline-head">
+          <h2>EXPERIMENT</h2>
+          <p class="sandbox-sub">Set up any position, then press Play. Moves follow the real rules.</p>
+        </div>
+        <div class="sandbox-palette" id="sb-palette-black"></div>
+        <div id="sandbox-board"></div>
+        <div class="sandbox-palette" id="sb-palette-red"></div>
+        <div class="sandbox-toolbar">
+          <button id="sb-playpause" class="sb-playpause">&#9654;  Play</button>
+          <button id="sb-play-hr" class="sb-play-hr" title="Play the position against Herringbone (5s)">&#9654;  Play vs Herringbone</button>
+          <div class="sb-edit-controls">
+            <div class="sb-side-row">
+              <span class="sb-ctrl-label">First:</span>
+              <button id="sb-side-red" class="sb-side-btn">Red</button>
+              <button id="sb-side-black" class="sb-side-btn">Black</button>
+            </div>
+            <button id="sb-clear" class="sb-tool-btn" title="Empty the board">Clear</button>
+            <button id="sb-start" class="sb-tool-btn" title="Reset to the starting position">Start pos.</button>
+          </div>
+          <button id="sb-flip" class="sb-tool-btn" title="Flip the board">&#8635; Flip</button>
+        </div>
+        <div id="sb-status" class="sandbox-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full-screen rules overlay (populated by rules-page.js) -->
+  <div id="rules-overlay" class="rules-overlay" style="display:none" onclick="if(event.target===this)D.closeRules()">
+    <div id="rules-overlay-modal" class="rules-overlay-modal">
+      <button class="rules-overlay-close" onclick="D.closeRules()" title="Close (Esc)">&#10005;</button>
+      <div id="rules-overlay-body"></div>
     </div>
   </div>
 
@@ -197,6 +168,8 @@
   <script src="game.js"></script>
   <script src="renderer.js"></script>
   <script src="ai-dispatch.js"></script>
+  <script src="rules-page.js"></script>
+  <script src="sandbox.js"></script>
 
   <script>
     // Player kind dropdown change handler

@@ -36,6 +36,8 @@
       "game.js",
       "renderer.js",
       "ai-dispatch.js",
+      "rules-page.js",
+      "sandbox.js",
       "assets/**",
       "onnx_models/**",
       "node_modules/**",
@@ -43,6 +45,7 @@
       "!**/*.test.js"
     ],
     "mac": {
+      "icon": "assets/drott.icns",
       "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
       "category": "public.app-category.games"
     },

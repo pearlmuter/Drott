@@ -41,6 +41,7 @@
       "sandbox.js",
       "assets/**",
       "onnx_models/**",
+      "!onnx_models/astrid_it*.onnx",
       "node_modules/**",
       "!node_modules/.cache/**",
       "!**/*.test.js"

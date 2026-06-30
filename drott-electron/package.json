@@ -1,6 +1,6 @@
 {
   "name": "drott",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Drott — a Norse strategy game",
   "main": "main.js",
   "scripts": {
@@ -48,7 +48,10 @@
     "mac": {
       "icon": "assets/drott.icns",
       "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
-      "category": "public.app-category.games"
+      "category": "public.app-category.games",
+      "identity": "EMIL DANIELSEN (3FY4D2C459)",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
     },
     "win": {
       "target": "nsis"

@@ -128,7 +128,7 @@ ipcMain.handle('drott-list-models', () => {
         return a.localeCompare(b);
       });
   } catch (_) {
-    return ['astrid_v1', 'astrid_v0'];
+    return ['astrid_v2', 'astrid_v1', 'astrid_v0'];
   }
 });
 

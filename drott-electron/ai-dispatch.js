@@ -27,7 +27,7 @@ function astridSearch(board, modelName, iterations) {
   const { ipcRenderer } = require('electron');
   return ipcRenderer.invoke('astrid-search', {
     board: JSON.parse(JSON.stringify(board)),
-    modelName: modelName || 'astrid_v1',
+    modelName: modelName || 'astrid_v2',
     iterations: iterations || 100,
   });
 }

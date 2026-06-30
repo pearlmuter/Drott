@@ -15,7 +15,7 @@
       <div class="sidebar-head">
         <h1 class="title">DROTT</h1>
         <p class="subtitle">A Norse Strategy Game</p>
-        <p class="version-label">v0.213</p>
+        <p class="version-label">v0.214</p>
       </div>
 
       <div class="section">
@@ -197,12 +197,12 @@
           </label>`;
       } else if (kind === 'astrid') {
         el.style.display = 'block';
-        let models = ['astrid_v1', 'astrid_v0'];
+        let models = ['astrid_v2', 'astrid_v1', 'astrid_v0'];
         try {
           const { ipcRenderer } = require('electron');
           models = await ipcRenderer.invoke('drott-list-models');
         } catch (_) {}
-        const curModel = D[`${side}Setup`].model || 'astrid_v1';
+        const curModel = D[`${side}Setup`].model || 'astrid_v2';
         const opts = models.map(m => {
           const label = m.replace(/^astrid_/, '').replace(/^it(\d+)$/, 'it $1');
           const sel = m === curModel ? ' selected' : '';

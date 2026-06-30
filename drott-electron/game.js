@@ -19,8 +19,8 @@ D.showAttackMap = false;
 D.analysisMode  = false;
 D.autoFlip      = false;
 
-D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
-D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v1', iterations: 100 };
+D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v2', iterations: 100 };
+D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v2', iterations: 100 };
 
 const COLS = 'ABCDEFGHI';
 

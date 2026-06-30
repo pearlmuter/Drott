@@ -44,6 +44,7 @@ function executeMove(move) {
     const cap = D.board.squares[to[0] + to[1] * D.N];
     if (cap) (side === 'red' ? D.capturedRed : D.capturedBlack).push(cap.type);
   }
+  if (D.playSound) D.playSound(move[2] ? 'capture' : 'move');
   D.moveHistory.push({ notation: moveNotation(move), side });
   D.lastMove = [move[0], move[1]];
   D.board = D.applyMove(D.board, move);

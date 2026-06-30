@@ -57,6 +57,114 @@ let sb = null;
 let svg, pieceLayer, hlLayer, built = false, wired = false;
 let _hrGen = 0;            // bumped on pause/close so stale HR results are ignored
 
+// --- Drag state ---
+let _drag     = null;   // active drag payload
+let _preClick = null;   // { col, row, startX, startY } — pending click before drag threshold
+
+function _sbRect() { return svg ? svg.getBoundingClientRect() : null; }
+
+function _clientToSquare(clientX, clientY) {
+  const r = _sbRect(); if (!r) return null;
+  const lx = clientX - r.left, ly = clientY - r.top;
+  let c = Math.floor(lx / CELL), row = 8 - Math.floor(ly / CELL);
+  if (sb.flipped) { c = 8 - c; row = 8 - row; }
+  if (c < 0 || c > 8 || row < 0 || row > 8) return null;
+  return [c, row];
+}
+
+function _makeGhost(type, side) {
+  const ghost = document.createElement('img');
+  ghost.src = pieceURI(type, side);
+  const sz = CELL * 0.9;
+  Object.assign(ghost.style, {
+    position: 'fixed', width: `${sz}px`, height: `${sz}px`,
+    pointerEvents: 'none', opacity: '0.85', zIndex: '9999',
+    transform: 'translate(-50%,-50%)', userSelect: 'none',
+  });
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+function _moveGhost(e) {
+  if (_drag?.ghost) { _drag.ghost.style.left = `${e.clientX}px`; _drag.ghost.style.top = `${e.clientY}px`; }
+}
+
+function _startBoardPieceDrag(col, row, e) {
+  const piece = sb.board.squares[col + row * N];
+  if (sb.mode === 'play') {
+    if (!piece || piece.side !== sb.board.sideToMove) return;
+    if (sb.opponent === 'herringbone' && sb.board.sideToMove === AI_SIDE) return;
+    sb.sel = [col, row];
+    sb.valid = D.legalMoves(sb.board).filter(m => m[0][0] === col && m[0][1] === row);
+    renderHighlights();
+    _drag = { kind: 'play', type: piece.type, side: piece.side, fromCol: col, fromRow: row,
+              ghost: _makeGhost(piece.type, piece.side) };
+  } else {
+    if (!piece) return;
+    sb.sel = [col, row]; renderHighlights();
+    _drag = { kind: 'board', type: piece.type, side: piece.side, fromCol: col, fromRow: row,
+              ghost: _makeGhost(piece.type, piece.side) };
+  }
+  _moveGhost(e);
+}
+
+function _startPaletteDrag(type, side, e) {
+  if (sb.mode !== 'edit') return;
+  sb.tool = 'place'; sb.pal = { type, side }; updateControls();
+  _drag = { kind: 'palette', type, side, fromCol: null, fromRow: null,
+            ghost: _makeGhost(type, side) };
+  _moveGhost(e);
+}
+
+function _endDrag(e) {
+  if (!_drag) return;
+  _drag.ghost.remove();
+  const target = _clientToSquare(e.clientX, e.clientY);
+  const { kind, type, side, fromCol, fromRow } = _drag;
+  _drag = null;
+  sb.sel = null; sb.valid = [];
+
+  if (!target) { renderAll(); return; }
+  const [tc, tr] = target;
+
+  if (kind === 'palette') {
+    sb.board.squares[tc + tr * N] = { type, side, col: tc, row: tr };
+  } else if (kind === 'board') {
+    const fi = fromCol + fromRow * N, ti = tc + tr * N;
+    if (fi !== ti) {
+      sb.board.squares[ti] = { type, side, col: tc, row: tr };
+      sb.board.squares[fi] = null;
+    }
+  } else if (kind === 'play') {
+    const mv = sb.valid.find(m => m[1][0] === tc && m[1][1] === tr);
+    if (mv) { doMove(mv); return; }
+  }
+  renderAll();
+}
+
+function _docMouseMove(e) {
+  if (_preClick) {
+    const dx = e.clientX - _preClick.startX, dy = e.clientY - _preClick.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+      const { col, row } = _preClick; _preClick = null;
+      _startBoardPieceDrag(col, row, e);
+    }
+  }
+  _moveGhost(e);
+}
+
+function _docMouseUp(e) {
+  document.removeEventListener('mousemove', _docMouseMove);
+  document.removeEventListener('mouseup', _docMouseUp);
+  if (_drag) {
+    _endDrag(e);
+  } else if (_preClick) {
+    onCell(_preClick.col, _preClick.row);
+  }
+  _preClick = null;
+  if (_drag) { _drag.ghost.remove(); _drag = null; }
+}
+
 function el(tag) { return document.createElementNS(NS, tag); }
 function sa(e, a) { for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; }
 
@@ -99,7 +207,13 @@ function buildBoard() {
       const [tx, ty] = dispTL(col, row);
       const r = sa(el('rect'), { x: tx, y: ty, width: CELL, height: CELL, fill: 'transparent' });
       r.style.cursor = 'pointer';
-      r.addEventListener('click', () => onCell(col, row));   // closure keeps BOARD coords
+      r.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        _preClick = { col, row, startX: e.clientX, startY: e.clientY };
+        document.addEventListener('mousemove', _docMouseMove);
+        document.addEventListener('mouseup', _docMouseUp);
+      });
       clickLayer.appendChild(r);
     }
   }
@@ -318,8 +432,16 @@ function buildPalette(side) {
   row.innerHTML = hand + swatches + trash;
   row.querySelector('.sb-hand').addEventListener('click', selectHand);
   row.querySelector('.sb-trash').addEventListener('click', selectTrash);
-  row.querySelectorAll('.sb-swatch').forEach(b =>
-    b.addEventListener('click', () => selectPalette(b.dataset.type, b.dataset.side)));
+  row.querySelectorAll('.sb-swatch').forEach(b => {
+    b.addEventListener('click', () => selectPalette(b.dataset.type, b.dataset.side));
+    b.addEventListener('mousedown', e => {
+      if (e.button !== 0 || sb.mode !== 'edit') return;
+      e.preventDefault();
+      _startPaletteDrag(b.dataset.type, b.dataset.side, e);
+      document.addEventListener('mousemove', _docMouseMove);
+      document.addEventListener('mouseup', _docMouseUp);
+    });
+  });
 }
 
 function ensureBuilt() {

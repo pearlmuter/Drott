@@ -204,6 +204,12 @@ def main():
                     help="head-to-head games for the accept/reject gate (0 = always accept)")
     ap.add_argument("--threshold", type=float, default=0.5,
                     help="candidate must win this fraction of DECISIVE arena games to be kept")
+    ap.add_argument("--temp-threshold", dest="temp_threshold", type=int, default=20,
+                    help="plies of temperature=1 (sampled) self-play before switching to greedy")
+    ap.add_argument("--dir-eps", dest="dir_eps", type=float, default=0.25,
+                    help="Dirichlet root-noise weight for SELF-PLAY exploration (0 = off)")
+    ap.add_argument("--dir-alpha", dest="dir_alpha", type=float, default=0.3,
+                    help="Dirichlet alpha (concentration) for self-play root noise")
     ap.add_argument("--checkpoint", default="temp")
     ap.add_argument("--device", default="cpu",
                     help="cpu (fastest for batch-1 MCTS) | mps | cuda")
@@ -244,10 +250,14 @@ def main():
 
     print(f"device: {nnet.device} | running iters {start_it}–{start_it + a.iters - 1} | "
           f"eps={a.eps} sims={a.sims} maxMoves={a.maxmoves} channels={a.channels} "
-          f"hist={a.histwindow} arena={a.arena} thr={a.threshold}")
+          f"hist={a.histwindow} arena={a.arena} thr={a.threshold} "
+          f"epochs={a.epochs} tempThr={a.temp_threshold} dirEps={a.dir_eps} dirAlpha={a.dir_alpha}")
 
+    # Self-play search: Dirichlet root noise ON (exploration). Arena/eval build
+    # their own args WITHOUT these keys, so they stay noise-free (true strength).
     play_args = dotdict({"numMCTSSims": a.sims, "cpuct": 1.0,
-                         "tempThreshold": 15, "maxMoves": a.maxmoves})
+                         "tempThreshold": a.temp_threshold, "maxMoves": a.maxmoves,
+                         "dirichletEps": a.dir_eps, "dirichletAlpha": a.dir_alpha})
 
     _here = os.path.dirname(os.path.abspath(__file__))
     out_dir = a.out_dir or os.path.join(_here, "..", "drott-electron", "onnx_models")

@@ -33,6 +33,7 @@
       "onnx-ai.js",
       "astrid-fork.js",
       "hud.js",
+      "sound.js",
       "game.js",
       "renderer.js",
       "ai-dispatch.js",

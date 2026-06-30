@@ -15,7 +15,7 @@
       <div class="sidebar-head">
         <h1 class="title">DROTT</h1>
         <p class="subtitle">A Norse Strategy Game</p>
-        <p class="version-label">v0.212</p>
+        <p class="version-label">v0.213</p>
       </div>
 
       <div class="section">
@@ -120,6 +120,7 @@
           <button id="attack-map-btn" class="board-tool-btn" onclick="D.toggleAttackMap()" title="Toggle attack map">Attack Map</button>
           <button id="flip-btn" class="board-tool-btn" onclick="D.flipBoard()" title="Flip the board">&#8635; Flip</button>
           <button id="auto-flip-btn" class="board-tool-btn" onclick="D.toggleAutoFlip()" title="Auto-flip after each move (hotseat)">&#8635; Auto</button>
+          <button id="mute-btn" class="board-tool-btn" onclick="D.toggleMute()" title="Toggle sound">&#128266; Sound</button>
         </div>
       </div>
 
@@ -160,6 +161,7 @@
   </div>
 
   <!-- Load order matters: board-state → rules → AI → hud → game → renderer → dispatch -->
+  <script src="sound.js"></script>
   <script src="board-state.js"></script>
   <script src="drott-rules.js"></script>
   <script src="herringbone-ai.js"></script>

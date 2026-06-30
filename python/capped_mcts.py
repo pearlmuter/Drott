@@ -1,4 +1,4 @@
-"""Depth-capped MCTS for Drott.
+"""Depth-capped MCTS for Drott, with optional Dirichlet root-exploration noise.
 
 The framework's MCTS.search recurses once per ply with no depth bound. That is
 fine for Othello (the board fills monotonically, so no line can cycle), but Drott
@@ -9,6 +9,20 @@ This subclass adds a per-descent depth cap: a line longer than `max_depth` is
 treated as a neutral (drawish) leaf, value 0. That breaks cycles and bounds the
 recursion while leaving the rest of the framework MCTS untouched. Only the
 training/eval driver uses it; the proven DrottGame/rules are unchanged.
+
+DIRICHLET ROOT NOISE (the fix for training stagnation, 2026-06-30)
+------------------------------------------------------------------
+Stock alpha-zero-general MCTS uses the raw network priors with no perturbation, so
+with temp=0 after the opening, self-play games are almost deterministic — the net
+keeps replaying the same lines and can never discover anything to beat the
+incumbent (we saw the candidate win 0 / 160 arena games). Real AlphaZero perturbs
+the ROOT priors of each self-play move with Dirichlet noise:
+    P(root) = (1 - eps) * p + eps * Dirichlet(alpha)
+This is enabled ONLY for self-play (args.dirichletEps > 0). Arena/eval MCTS leave
+eps = 0 so they measure the net's TRUE strength against the incumbent — never a
+deliberately-perturbed net. Noise is mixed from a cached CLEAN copy of each root's
+priors, so a position that recurs as a root gets fresh noise rather than
+compounding.
 """
 
 import math
@@ -21,6 +35,38 @@ class CappedMCTS(MCTS):
     def __init__(self, game, nnet, args, max_depth=120):
         super().__init__(game, nnet, args)
         self.max_depth = max_depth
+        # Self-play exploration noise (0 = off, the default for arena/eval).
+        self.dir_eps = float(args["dirichletEps"]) if "dirichletEps" in args else 0.0
+        self.dir_alpha = float(args["dirichletAlpha"]) if "dirichletAlpha" in args else 0.3
+        self._root_clean = {}   # s -> unperturbed prior, so re-noising never compounds
+
+    def getActionProb(self, canonicalBoard, temp=1):
+        # Perturb the root priors before the simulations (self-play only).
+        if self.dir_eps > 0:
+            self._add_root_noise(canonicalBoard)
+        return super().getActionProb(canonicalBoard, temp)
+
+    def _add_root_noise(self, canonicalBoard):
+        s = self.game.stringRepresentation(canonicalBoard)
+        if s not in self.Ps:
+            self.search(canonicalBoard)   # expand the root so it has priors to perturb
+        if s not in self.Ps:
+            return                         # terminal root — nothing to perturb
+        valids = self.Vs[s]
+        idx = np.where(valids)[0]
+        if idx.size == 0:
+            return
+        if s not in self._root_clean:
+            self._root_clean[s] = self.Ps[s].copy()
+        base = self._root_clean[s]
+        noise = np.random.dirichlet([self.dir_alpha] * idx.size)
+        ps = base.copy()
+        ps[idx] = (1.0 - self.dir_eps) * base[idx] + self.dir_eps * noise
+        ps = ps * valids
+        tot = ps.sum()
+        if tot > 0:
+            ps /= tot
+        self.Ps[s] = ps
 
     def search(self, canonicalBoard, depth=0):
         # A line too long to resolve is scored as a draw (0). The minus sign keeps

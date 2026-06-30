@@ -10,8 +10,23 @@ const PIECE_LABELS = {
   elf:'El', wolf:'Wo', dwarf:'Dw', hunter:'Hu', skjolding:'Sk',
 };
 
+function show(id, visible) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = visible ? '' : 'none';
+}
+
+function updateButtons() {
+  const phase = D.gamePhase;
+  show('start-btn',  phase === 'setup');
+  show('new-game-btn', phase === 'finished');
+  show('resign-btn', phase === 'playing');
+  show('draw-btn',   phase === 'playing');
+  show('abort-btn',  phase === 'playing');
+}
+
 function updateHUD(thinking = false) {
   if (!D.board) return;
+  updateButtons();
   const side = D.board.sideToMove === 'red' ? 'Red' : 'Black';
   const el = document.getElementById('turn-label');
   if (D.analysisMode) { el.textContent = 'Analysis'; el.classList.remove('thinking'); return; }

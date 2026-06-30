@@ -14,7 +14,8 @@ python/parity_corpus.json
 
 # third-party AlphaZero framework (local dev dependency; not our code)
 alpha-zero-general-master/
-python/temp/          # training checkpoints
+# training checkpoints + replay buffer (multi-GB, regenerable)
+python/temp/
 *.pth.tar
 *.examples
 

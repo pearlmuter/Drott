@@ -1,0 +1,58 @@
+name: Build desktop apps
+
+# Builds the Windows installer and Linux AppImage on native runners.
+# macOS is built + signed/notarized locally (the Developer ID cert lives in the
+# local keychain), so it is intentionally not part of CI.
+#
+# Run on demand from the Actions tab (workflow_dispatch), or automatically when a
+# version tag like v1.0.0 is pushed. Artifacts are attached to the run — download
+# them from the run summary page.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+defaults:
+  run:
+    working-directory: drott-electron
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: drott-electron/package-lock.json
+      - run: npm ci
+      - name: Build Windows installer (NSIS, unsigned)
+        run: npx electron-builder --win nsis --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drott-windows
+          path: |
+            drott-electron/dist/*.exe
+            drott-electron/dist/*.blockmap
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: drott-electron/package-lock.json
+      - run: npm ci
+      - name: Build Linux AppImage
+        run: npx electron-builder --linux AppImage --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drott-linux
+          path: drott-electron/dist/*.AppImage
+          if-no-files-found: error

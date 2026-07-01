@@ -25,9 +25,9 @@ echo "caffeinate PID: $!" | tee -a "$LOGFILE"
 STOP_SECS=$("$PYBIN" -c "
 import datetime
 now = datetime.datetime.now()
-t = now.replace(hour=7, minute=0, second=0, microsecond=0)
+t = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if t <= now: t += datetime.timedelta(days=1)
 print(int((t - now).total_seconds()))
 ")
 nohup sh -c "sleep $STOP_SECS && kill -INT $TPID && echo \"Stopped at \$(date)\" >> '$LOGFILE'" > /dev/null 2>&1 &
-echo "Stop scheduled in ${STOP_SECS}s (07:00)" | tee -a "$LOGFILE"
+echo "Stop scheduled in ${STOP_SECS}s (21:00)" | tee -a "$LOGFILE"

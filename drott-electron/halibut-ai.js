@@ -35,6 +35,14 @@ const F = {
   NULLMOVE:   feat('HB_NULLMOVE',   false),
   LMR2:       feat('HB_LMR2',       true),
   KINGSAFE:   feat('HB_KINGSAFE',   true),
+  // Standing-threat eval term: charges the side to move a fraction (HB_THREAT_W,
+  // default 0.5) of the biggest piece the opponent can win by SEE, so a soft
+  // hanging piece feels urgent. Measured vs Herringbone (depth 4, 40 games):
+  // baseline +56 Elo, w=0.5 +44, w=1.0 +70 — all within noise, and ~17% slower
+  // eval. No clear strength gain, so OFF by default; kept flag-gated for tuning
+  // (it does make the engine more materialistic / "look smarter" about hanging
+  // pieces, a perception vs strength trade).
+  THREAT:     feat('HB_THREAT',     false),
 };
 
 const _N  = 9;
@@ -76,12 +84,14 @@ const TROPISM_W = {
   dwarf: 4, elf: 4,
 };
 
-// Positional weights
-const PAWN_CENTER_W = 6;
+// Positional weights (PAWN_* env-tunable for center-bias experiments)
+const PAWN_CENTER_W = _ENV.HB_PAWN_CENTER_W ? parseFloat(_ENV.HB_PAWN_CENTER_W) : 6;
+const PAWN_ADV_W    = _ENV.HB_PAWN_ADV_W    ? parseFloat(_ENV.HB_PAWN_ADV_W)    : 4;
 const MINOR_FILE_W  = 6;
 const FLANK_FILE_W  = 4;
 const DEVELOP_W     = 4;
 const KING_SAFETY_W = 4;
+const THREAT_W      = _ENV.HB_THREAT_W ? parseFloat(_ENV.HB_THREAT_W) : 0.5;   // fraction of a standing SEE-winning threat charged to the side to move
 
 function chebyshev(c1, r1, c2, r2) { return Math.max(Math.abs(c1-c2), Math.abs(r1-r2)); }
 
@@ -286,7 +296,7 @@ function evaluate(board, me) {
         const closeness = half - chebyshev(p.col, p.row, cx, cy);
         if (closeness > 0) score += sgn * closeness * PAWN_CENTER_W;
         const adv = p.side === 'red' ? p.row : (_N - 1 - p.row);
-        score += sgn * adv * 4;
+        score += sgn * adv * PAWN_ADV_W;
         break;
       }
       case 'spearman': case 'bowman': case 'berserker': {
@@ -364,6 +374,27 @@ function evaluate(board, me) {
     }
     score += (dangerToOpp - dangerToMe) * KING_SAFETY_W;
     score -= Math.max(0, 3 - myEsc) * 6;   // cramped king penalty
+  }
+
+  // Standing-threat awareness. Captures are already searched, but a threat the
+  // opponent *declines* never enters the score, so a soft (e.g. pawn-value)
+  // hanging piece can sit en prise for many moves. Charge the side to move a
+  // fraction of the biggest piece the opponent can win by SEE, so it feels the
+  // threat and resolves it. Bounded to one opponent move-gen + one SEE per leaf.
+  if (F.THREAT) {
+    const oppBoard = { squares: board.squares, sideToMove: opp, winner: null };
+    let bestCap = null, bestVal = -1;
+    for (const cap of D.legalMoves(oppBoard)) {
+      if (!cap[2]) continue;
+      const victim = board.squares[cap[1][0] + cap[1][1] * _N];
+      if (!victim || victim.side !== me || victim.type === 'king') continue;
+      const v = baseValue(victim.type);
+      if (v > bestVal) { bestVal = v; bestCap = cap; }
+    }
+    if (bestCap) {
+      const see = staticExchangeEval(oppBoard, bestCap);
+      if (see > 0) score -= Math.floor(see * THREAT_W);
+    }
   }
 
   return score;

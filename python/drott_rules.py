@@ -361,7 +361,15 @@ def _elf(board, p, out):
 
 def _king(board, p, out):
     c, r = p[2], p[3]
-    for dc, dr in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+    # Orthogonal steps are unconditional.
+    for dc, dr in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        _emit(board, p, out, c + dc, r + dr)
+    # Diagonal steps are blocked by a shield wall: the king may not slip
+    # between two pieces on the orthogonal corners of the diagonal (matches JS
+    # _king in drott-rules.js and the _dwarf/_hunter origin-corner pinch).
+    for dc, dr in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        if board.occupied(c, r + dr) and board.occupied(c + dc, r):
+            continue  # origin-corner pinch
         _emit(board, p, out, c + dc, r + dr)
 
 

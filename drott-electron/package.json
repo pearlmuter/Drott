@@ -30,6 +30,8 @@
       "drott-rules.js",
       "herringbone-ai.js",
       "herringbone-fork.js",
+      "halibut-ai.js",
+      "halibut-fork.js",
       "onnx-ai.js",
       "astrid-fork.js",
       "hud.js",

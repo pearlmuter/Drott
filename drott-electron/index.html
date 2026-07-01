@@ -23,6 +23,7 @@
           <span class="player-label red-label">Red</span>
           <select id="red-kind" onchange="onPlayerChange('red')">
             <option value="human">Human</option>
+            <option value="halibut">Halibut</option>
             <option value="herringbone">Herringbone</option>
             <option value="astrid">Astrid</option>
           </select>
@@ -33,6 +34,7 @@
           <span class="player-label black-label">Black</span>
           <select id="black-kind" onchange="onPlayerChange('black')">
             <option value="human">Human</option>
+            <option value="halibut">Halibut</option>
             <option value="herringbone">Herringbone</option>
             <option value="astrid">Astrid</option>
           </select>
@@ -165,6 +167,7 @@
   <script src="board-state.js"></script>
   <script src="drott-rules.js"></script>
   <script src="herringbone-ai.js"></script>
+  <script src="halibut-ai.js"></script>
   <script src="onnx-ai.js"></script>
   <script src="hud.js"></script>
   <script src="game.js"></script>
@@ -182,10 +185,41 @@
       renderPlayerOptions(side, kind);
     }
 
+    // Halibut difficulty presets. Difficulty = search budget + endpoint variety
+    // only; the search itself is always deterministic (no eval noise). variety is
+    // the centipawn margin for the endpoint move pool (0 = always the best move).
+    const HALIBUT_LEVELS = {
+      easy:   { thinkTime: 2, depthCap: 4, variety: 60 },
+      normal: { thinkTime: 5, depthCap: 0, variety: 15 },
+      hard:   { thinkTime: 9, depthCap: 0, variety: 0  },
+    };
+    function setHalibutLevel(side, level) {
+      const preset = HALIBUT_LEVELS[level] || HALIBUT_LEVELS.normal;
+      const setup = D[`${side}Setup`];
+      setup.level    = level;
+      setup.thinkTime = preset.thinkTime;
+      setup.depthCap  = preset.depthCap;   // 0 = unlimited (dispatch maps to undefined)
+      setup.variety   = preset.variety;
+    }
+
     async function renderPlayerOptions(side, kind) {
       const el = document.getElementById(`${side}-options`);
       el.innerHTML = '';
-      if (kind === 'herringbone') {
+      if (kind === 'halibut') {
+        el.style.display = 'block';
+        const cur = D[`${side}Setup`].level || 'normal';
+        setHalibutLevel(side, cur);   // ensure setup is populated
+        const opt = (v, label) =>
+          `<option value="${v}"${v === cur ? ' selected' : ''}>${label}</option>`;
+        el.innerHTML = `
+          <label>Strength
+            <select onchange="setHalibutLevel('${side}', this.value)">
+              ${opt('easy',   'Easy')}
+              ${opt('normal', 'Normal')}
+              ${opt('hard',   'Hard')}
+            </select>
+          </label>`;
+      } else if (kind === 'herringbone') {
         el.style.display = 'block';
         el.innerHTML = `
           <label>Strength

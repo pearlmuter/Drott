@@ -150,6 +150,41 @@ Herringbone convincingly, we may not need every technique below it.
 - Test changes in isolation so we know what actually helped.
 - Herringbone remains the frozen reference opponent throughout.
 
+## Results (measured)
+
+Match harness (`drott-electron/tools/match.js`), colors alternated, deterministic
+best-move play, random 3-ply openings. Feature isolation vs frozen Herringbone at
+equal depth 4 (40 games each):
+
+| Feature (alone)        | Score vs HR | Verdict            |
+|------------------------|-------------|--------------------|
+| all flags off (sanity) | 50.0%       | HB ≡ HR ✓          |
+| light move ordering    | ~neutral, ~30% faster | keep     |
+| scaled LMR             | neutral, faster | keep           |
+| king-safety eval       | **HB +44 Elo** | keep            |
+| null-move pruning      | **HB −35 Elo** | drop (unsound: king-capture game, no "check") |
+| win-condition ext.     | crashed (non-terminating) | removed |
+
+Combined Halibut (light ordering + scaled LMR + king safety; null-move off):
+
+- **Equal depth: HB +56 Elo** (58% over 50 games) — better per node.
+- **Equal time (0.25s/move): HB +98 Elo** (63.7% over 40 games) — per-node
+  quality plus ~30% higher throughput cashed in as extra depth.
+
+Difficulty (endpoint variety only; search always deterministic): Easy = depth-cap
+4 + variety 60; Normal = full time + variety 15; Hard = full time + variety 0.
+
+### Discovered (separate, pre-existing) — king diagonal rule divergence
+
+While re-enabling the dormant parity test (its corpus path was wrong), it surfaced
+that the shipped JS `_king` generator (drott-rules.js) blocks diagonal king moves
+with a shield-wall corner-pinch, but the canonical Python `_king`
+(python/drott_rules.py:362) — the rules **Astrid was trained on** — emits all 8
+king moves unconditionally. JS is over-restrictive for the king. This is
+pre-existing, affects HR and HB equally, and is a gameplay-rules change, so it was
+left untouched pending a decision (fix JS to match canonical + re-enable parity, or
+confirm the block is intended and regenerate the corpus).
+
 ## References
 
 - Null Move Pruning — https://www.chessprogramming.org/Null_Move_Pruning

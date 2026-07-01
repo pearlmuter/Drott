@@ -19,8 +19,12 @@ D.showAttackMap = false;
 D.analysisMode  = false;
 D.autoFlip      = false;
 
-D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v2', iterations: 100 };
-D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v2', iterations: 100 };
+// level/depthCap/variety drive the Halibut engine's difficulty (see index.html
+// HALIBUT_LEVELS). Defaults match the 'normal' preset.
+D.redSetup   = { kind: 'human', thinkTime: 5, model: 'astrid_v2', iterations: 100,
+                 level: 'normal', depthCap: 0, variety: 15 };
+D.blackSetup = { kind: 'human', thinkTime: 5, model: 'astrid_v2', iterations: 100,
+                 level: 'normal', depthCap: 0, variety: 15 };
 
 const COLS = 'ABCDEFGHI';
 

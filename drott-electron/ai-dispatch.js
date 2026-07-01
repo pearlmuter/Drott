@@ -12,6 +12,7 @@ D.terminateHRWorker = function() {
   _gen++;
   const { ipcRenderer } = require('electron');
   try { ipcRenderer.invoke('hr-abort'); } catch (_) {}
+  try { ipcRenderer.invoke('hb-abort'); } catch (_) {}
   try { ipcRenderer.invoke('astrid-abort'); } catch (_) {}
 };
 
@@ -20,6 +21,16 @@ function hrSearch(board, thinkTime) {
   return ipcRenderer.invoke('hr-search', {
     board: JSON.parse(JSON.stringify(board)),
     thinkTime,
+  });
+}
+
+function hbSearch(board, setup) {
+  const { ipcRenderer } = require('electron');
+  return ipcRenderer.invoke('hb-search', {
+    board: JSON.parse(JSON.stringify(board)),
+    thinkTime: setup.thinkTime || 5,
+    depthCap: setup.depthCap || undefined,
+    variety:  setup.variety != null ? setup.variety : 0,
   });
 }
 
@@ -58,6 +69,15 @@ async function runAITurn(side, setup) {
         move = result.move;
       } else if (result && result.error) {
         console.error('HR search error:', result.error);
+      }
+    } else if (setup.kind === 'halibut') {
+      const result = await hbSearch(D.board, setup);
+      if (_gen !== myGen) return;
+      if (result && result.move) {
+        if (D.showEval) D.showEval(result.score, result.depth, side);
+        move = result.move;
+      } else if (result && result.error) {
+        console.error('HB search error:', result.error);
       }
     } else if (setup.kind === 'astrid') {
       const result = await astridSearch(D.board, setup.model, setup.iterations);

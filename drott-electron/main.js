@@ -54,6 +54,48 @@ ipcMain.handle('hr-search', (event, { board, thinkTime }) => {
 ipcMain.handle('hr-abort', () => { _killHR(); return null; });
 
 // ---------------------------------------------------------------------------
+// Halibut AI — stronger classical engine, same fork pattern as Herringbone.
+// ---------------------------------------------------------------------------
+let _hbChild   = null;
+let _hbResolve = null;
+
+function _killHB() {
+  if (_hbChild) { try { _hbChild.kill(); } catch (_) {} _hbChild = null; }
+  if (_hbResolve) { _hbResolve(null); _hbResolve = null; }
+}
+
+function _hbProcess() {
+  if (_hbChild && !_hbChild.killed) return _hbChild;
+  _hbChild = fork(
+    path.join(__dirname, 'halibut-fork.js'),
+    [],
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
+  );
+  _hbChild.on('message', (result) => {
+    if (_hbResolve) { const r = _hbResolve; _hbResolve = null; r(result); }
+  });
+  _hbChild.on('error', (err) => {
+    console.error('HB fork error:', err);
+    if (_hbResolve) { const r = _hbResolve; _hbResolve = null; r({ error: String(err) }); }
+    _hbChild = null;
+  });
+  _hbChild.on('exit', () => {
+    _hbChild = null;
+    if (_hbResolve) { const r = _hbResolve; _hbResolve = null; r({ error: 'AI process exited' }); }
+  });
+  return _hbChild;
+}
+
+ipcMain.handle('hb-search', (event, { board, thinkTime, depthCap, variety }) => {
+  return new Promise((resolve) => {
+    _hbResolve = resolve;
+    _hbProcess().send({ board, thinkTime, depthCap, variety });
+  });
+});
+
+ipcMain.handle('hb-abort', () => { _killHB(); return null; });
+
+// ---------------------------------------------------------------------------
 // Astrid AI — same fork pattern; child runs onnxruntime-node + MCTS in its
 // own OS process so the renderer never blocks during neural net inference.
 // ---------------------------------------------------------------------------
